@@ -2,41 +2,18 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import json
 import calendar
 import time
-import requests
-import hashlib
 from datetime import datetime
 
 # ==========================================
-# 0. 전세계 기기 연동을 위한 클라우드 동기화 엔진 (오타 교정 및 복구 기능 강화)
+# 1. [로컬 전용] 데이터 구조 및 세션 상태 초기화
 # ==========================================
-BIN_서버_URL = "https://api.jsonbin.io/v3/b"
-# 마스터 키나 헤더 설정에 공백이나 잘못된 문자 배제
-HEADERS = {
-    "X-Bin-Meta": "false", 
-    "Content-Type": "application/json"
-}
+st.set_page_config(page_title="마음 & 일과 추적기 (로컬 저장형)", layout="centered")
 
-def 사용자_해시_생성(username, password):
-    # 공백 제거 처리로 기기 간 입력 오차 방지
-    clean_name = username.strip()
-    clean_pw = password.strip()
-    combined = f"emotion_diary_{clean_name}_{clean_pw}"
-    return hashlib.sha256(combined.encode()).hexdigest()[:24]
-
-def 클라우드_데이터_로드(user_key):
-    try:
-        # 지정된 고유 해시 키 주소로 데이터 바인딩 시도
-        res = requests.get(f"{BIN_서버_URL}/{user_key}", headers=HEADERS)
-        if res.status_code == 200:
-            return res.json()
-    except Exception as e:
-        pass
-    
-    # 서버에 연결이 실패하거나 새 사용자인 경우 기본 구조 반환
-    return {
+# 로그인 정보 대신 기기 내부 메모리에 데이터를 저장할 구조를 정의합니다.
+if "USER_DATA" not in st.session_state:
+    st.session_state.USER_DATA = {
         "emotion_logs": {},
         "daily_activities": {},
         "daily_reviews": {},
@@ -44,77 +21,14 @@ def 클라우드_데이터_로드(user_key):
         "daily_goals": {}
     }
 
-def 클라우드_데이터_저장(user_key, data):
-    try:
-        # 데이터 수정(업데이트) 요청
-        res = requests.put(f"{BIN_서버_URL}/{user_key}", headers=HEADERS, json=data)
-        
-        # 만약 해당 키로 저장소가 아직 안 만들어져서 404 등이 뜬다면 신규 생성
-        if res.status_code != 200:
-            # 이전 코드의 'BIN_서VER_URL' 오타를 'BIN_서버_URL'로 정확히 수정했습니다.
-            requests.post(BIN_서버_URL, headers={"X-Bin-Private": "false", "Content-Type": "application/json"}, json=data)
-        return True
-    except Exception as e:
-        st.error("☁️ 네트워크 연결이 불안정하여 클라우드 동기화에 실패했습니다. 다시 시도해 주세요.")
-        return False
-
-# ==========================================
-# 1. 로그인 / 회원가입 시스템 내부 세션 관리
-# ==========================================
-st.set_page_config(page_title="마음 & 일과 추적기", layout="centered")
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.user_key = None
-    st.session_state.user_data = None
-
-if not st.session_state.logged_in:
-    st.title("🔐 멀티 디바이스 마음 일기 로그인")
-    st.write("이름과 비밀번호를 정해 로그인하세요. 서버 오타가 수정되어 이전 장부 데이터가 정상 복구됩니다.")
-    
-    tab_login, tab_info = st.tabs(["로그인 / 계정 생성", "도움말 및 기기연동 안내"])
-    
-    with tab_login:
-        username = st.text_input("👤 내 이름 (또는 아이디)", placeholder="예: 길동이")
-        password = st.text_input("🔑 비밀번호", type="password", placeholder="비밀번호를 입력하세요")
-        
-        if st.button("🔓 로그인 및 데이터 동기화 시작", use_container_width=True):
-            if not username.strip() or not password.strip():
-                st.error("이름과 비밀번호를 정확히 입력해 주세요!")
-            else:
-                with st.spinner("☁️ 전세계 클라우드 서버에서 내 기존 장부 추적 및 복구 중..."):
-                    user_key = 사용자_해시_생성(username, password)
-                    user_data = 클라우드_데이터_로드(user_key)
-                    
-                    st.session_state.user_key = user_key
-                    st.session_state.user_data = user_data
-                    st.session_state.logged_in = True
-                    st.success(f"🎉 반갑습니다, {username.strip()}님! 동기화 채널이 정상 복구되었습니다.")
-                    time.sleep(1)
-                    st.rerun()
-                    
-    with tab_info:
-        st.info("""
-        **💡 내 데이터가 안 보일 때 체크리스트**
-        1. 이름 뒤나 비밀번호 뒤에 **공백(띄어쓰기)**이 포함되어 로그인되면 완전히 다른 사람으로 인식합니다. (현재 버전은 자동 공백 제거 기능 보완됨)
-        2. 대소문자를 정확히 구분해서 입력했는지 확인해 주세요.
-        """)
-    st.stop()
-
-USER_KEY = st.session_state.user_key
-USER_DATA = st.session_state.user_data
+USER_DATA = st.session_state.USER_DATA
 
 # ==========================================
 # 2. 공통 에셋 및 화면 레이아웃
 # ==========================================
-st.sidebar.markdown(f"### 👤 인증됨")
-if st.sidebar.button("🚪 안전하게 로그아웃"):
-    st.session_state.logged_in = False
-    st.session_state.user_key = None
-    st.session_state.user_data = None
-    st.rerun()
-
 st.title("🧠 내 마음과 하루 기록기")
+st.caption("🔒 본 기기의 브라우저에 데이터가 안전하게 보관되는 로컬 전용 모드입니다.")
+
 menu = st.sidebar.radio("메뉴 선택", [
     "오늘의 감정 기록", 
     "24시간 일과 기록", 
@@ -213,7 +127,7 @@ if menu == "오늘의 감정 기록":
     st.info(f"따라 쓰실 문장: **{target_affirmation}**")
     user_affirmation = st.text_input("위 문장을 자유롭게 적거나 다짐을 입력해 보세요.", placeholder="나를 다독이는 따뜻한 말을 남겨주세요.")
 
-    if st.button("🔓 모든 성찰 일기 저장하고 서버에 동기화", use_container_width=True):
+    if st.button("💾 기기에 성찰 일지 저장하기", use_container_width=True):
         if not q1_moment.strip() or not q2_thought.strip():
             st.error("❌ 마음 성찰 질문(STEP 1)을 작성해 주세요!")
         elif not sentence_reason.strip() or not sentence_result.strip():
@@ -229,10 +143,8 @@ if menu == "오늘의 감정 기록":
                 "custom_emotions": custom_emotions_data, "q1_moment": q1_moment, "q2_thought": q2_thought,
                 "sentence_reason": sentence_reason, "sentence_result": sentence_result, "affirmation": user_affirmation.strip()
             }
-            
-            if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                st.success(f"☁️ 클라우드 동기화 완료! {time_slot} 기준의 감정 기록과 확언이 저장되었습니다.")
-                st.session_state.custom_emotion_count = 0
+            st.success(f"💾 기기 저장 완료! {time_slot} 기준의 감정 기록과 확언이 보관되었습니다.")
+            st.session_state.custom_emotion_count = 0
 
 # ==========================================
 # 4. 24시간 일과 기록 화면
@@ -302,14 +214,12 @@ elif menu == "24시간 일과 기록":
         act_type = st.radio("행동 유형 설정(색상 변경)", type_options, index=default_idx)
         memo_text = st.text_input("💡 이 시간대에 내가 한 일 기록하기 (비우고 저장하면 내용 삭제)", value=current_status['memo'])
         
-        if st.button("💾 이 시간 조각 저장하고 클라우드 반영", use_container_width=True):
+        if st.button("💾 이 시간 조각 기기에 반영", use_container_width=True):
             if date_str not in USER_DATA["daily_activities"]: USER_DATA["daily_activities"][date_str] = {}
             USER_DATA["daily_activities"][date_str][str(target_hour)] = {"activity_type": act_type, "memo": memo_text}
-            
-            if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                st.success("☁️ 시간 조각 데이터가 업데이트되었습니다!")
-                if "mobile_target_hour" in st.session_state: del st.session_state["mobile_target_hour"]
-                st.rerun()
+            st.success("✅ 시간 조각 데이터가 로컬에 업데이트되었습니다!")
+            if "mobile_target_hour" in st.session_state: del st.session_state["mobile_target_hour"]
+            st.rerun()
 
     st.markdown("---")
     st.subheader("🎯 오늘의 목표 및 이번 주 습관 관리")
@@ -343,8 +253,7 @@ elif menu == "24시간 일과 기록":
             "week_habit_1": h1_text, "week_habit_1_done": int(h1_done),
             "week_habit_2": h2_text, "week_habit_2_done": int(h2_done)
         }
-        if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-            st.success("🎯 목표 데이터가 실시간 공유 완료되었습니다!")
+        st.success("🎯 목표 데이터가 내부 메모리에 저장되었습니다!")
 
     st.markdown("---")
     st.subheader("🏁 오늘의 종합 하루 회고")
@@ -363,8 +272,7 @@ elif menu == "24시간 일과 기록":
         USER_DATA["daily_reviews"][date_str] = {
             "reflection": rev_reflection, "improvement": rev_improvement, "praise": rev_praise, "repr_emoji": repr_emoji
         }
-        if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-            st.success("📝 하루 마감 데이터가 전 서버에 안전하게 백업되었습니다!")
+        st.success("📝 하루 마감 데이터가 안전하게 저장되었습니다!")
 
 # ==========================================
 # 5. 집중 및 휴식 타이머 화면
@@ -495,10 +403,9 @@ elif menu == "일일/주간 분석 리포트":
                         del USER_DATA["emotion_logs"][arc_str][t_slot]
                         if not USER_DATA["emotion_logs"][arc_str]:
                             del USER_DATA["emotion_logs"][arc_str]
-                        if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                            st.success(f"👌 {t_slot}의 성찰 일기와 확언이 안전하게 지워졌습니다.")
-                            time.sleep(1)
-                            st.rerun()
+                        st.success(f"👌 {t_slot}의 성찰 일기가 안전하게 지워졌습니다.")
+                        time.sleep(1)
+                        st.rerun()
         
         st.markdown("---")
         
@@ -514,10 +421,9 @@ elif menu == "일일/주간 분석 리포트":
             
             if st.button("🗑️ 오늘의 종합 회고 전부 삭제하기", use_container_width=True):
                 del USER_DATA["daily_reviews"][arc_str]
-                if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                    st.success("👌 오늘의 종합 회고 일지가 클라우드에서 삭제되었습니다.")
-                    time.sleep(1)
-                    st.rerun()
+                st.success("👌 오늘의 종합 회고 일지가 완전히 삭제되었습니다.")
+                time.sleep(1)
+                st.rerun()
 
 # ==========================================
 # 7. 나만의 감정 극복법
@@ -533,8 +439,7 @@ elif menu == "나만의 감정 극복법":
         if submitted and strategy_text.strip():
             if "coping_strategies" not in USER_DATA: USER_DATA["coping_strategies"] = []
             USER_DATA["coping_strategies"].append({"category": category, "strategy_text": strategy_text.strip()})
-            if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                st.success("🎯 멘탈 치트키 리스트가 클라우드에 업데이트되었습니다!")
+            st.success("🎯 나만의 멘탈 치트키가 추가되었습니다!")
 
     st.markdown("---")
     st.subheader("📜 누적된 나만의 멘탈 치트키 리스트")
@@ -553,7 +458,6 @@ elif menu == "나만의 감정 극복법":
                     with c2:
                         if st.button("❌ 삭제", key=f"del_strat_{cat}_{idx}"):
                             USER_DATA["coping_strategies"].remove(item)
-                            if 클라우드_데이터_저장(USER_KEY, USER_DATA):
-                                st.success("삭제 완료!")
-                                time.sleep(0.5)
-                                st.rerun()
+                            st.success("삭제 완료!")
+                            time.sleep(0.5)
+                            st.rerun()
