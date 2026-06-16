@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 데이터베이스(DB) 구조 업데이트 및 초기화
 # ==========================================
-DB_FILE = "emotion_diary_v10.db"
+DB_FILE = "emotion_diary_v11.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -67,11 +67,10 @@ init_db()
 st.set_page_config(page_title="마음 & 일과 추적기", layout="centered")
 st.title("🧠 내 마음과 하루 기록기")
 
-# 메뉴에 타이머 전용 메뉴 추가
 menu = st.sidebar.radio("메뉴 선택", [
     "오늘의 감정 기록", 
     "24시간 일과 기록", 
-    "집중 및 휴식 타이머 ⏱️", # 새로 추가된 메뉴
+    "집중 및 휴식 타이머 ⏱️",
     "일일/주간 분석 리포트", 
     "나만의 감정 극복법"
 ])
@@ -135,8 +134,8 @@ if menu == "오늘의 감정 기록":
     if st.session_state.custom_emotion_count > 0:
         for i in range(st.session_state.custom_emotion_count):
             cc1, cc2 = st.columns(2)
-            with cc1: c_name = st.text_input(f"감정 이름 (#{i+1})", key=f"c_name_{i}")
-            with cc2: c_score = st.number_input(f"수치 (#{i+1}) %", 0, 100, 50, 5, key=f"c_score_{i}")
+            with cc1: c_name = st.text_input(f"감정 이름 (#_{i+1})", key=f"c_name_{i}")
+            with cc2: c_score = st.number_input(f"수치 (#_{i+1}) %", 0, 100, 50, 5, key=f"c_score_{i}")
             if c_name.strip():
                 custom_emotions_data[c_name.strip()] = c_score
 
@@ -189,7 +188,7 @@ if menu == "오늘의 감정 기록":
             st.session_state.custom_emotion_count = 0
 
 # ==========================================
-# 3. 24시간 일과 기록 화면
+# 3. 24시간 일과 기록 화면 (★집중 유형 초록색 세팅★)
 # ==========================================
 elif menu == "24시간 일과 기록":
     st.header("🕒 24시간 타임 루프 기록")
@@ -219,7 +218,8 @@ elif menu == "24시간 일과 기록":
         
     df_act['display_text'] = df_act.apply(make_display_text, axis=1)
 
-    color_map = {"수면": "#4A90E2", "집중": "#F5A623", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
+    # 💡 [집중 컬러 변경]: "집중" 유형의 고유 색상을 주황색에서 선명하고 밝은 초록색(#2ECC71)으로 수정
+    color_map = {"수면": "#4A90E2", "집중": "#2ECC71", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
     df_act['color'] = df_act['activity_type'].map(color_map)
 
     st.subheader("📊 오늘의 시간 시계 원그래프")
@@ -367,50 +367,36 @@ elif menu == "24시간 일과 기록":
         st.success("📝 하루의 회고가 안전하게 마감되었습니다!")
 
 # ==========================================
-# 4. [신규 추가] 집중 및 휴식 타이머 화면
+# 4. 집중 및 휴식 타이머 화면
 # ==========================================
 elif menu == "집중 및 휴식 타이머 ⏱️":
     st.header("⏱️ 몰입과 휴식을 위한 마인드 타이머")
     st.write("의도적인 집중과 확실한 휴식을 분리하여 시간을 지배해 보세요.")
 
-    # 두 가지 모드 선택
     timer_mode = st.radio("⏰ 타이머 모드 선택", ["🔥 집중/공부 모드", "🌴 휴식/놀이 모드"], horizontal=True)
 
-    # 모드에 따른 추천 시간 세팅 및 가이드 문구 변경
     if timer_mode == "🔥 집중/공부 모드":
         st.info("💡 추천 집중 시간: **25분** (뽀모도로 기법)")
         default_minutes = 25
-        progress_color = "orange"
     else:
-        st.info("💡 추천 휴식 시간: **5분** 또는 **15분** (이 시간 이후에는 다시 일과로 복귀합니다)")
+        st.info("💡 추천 휴식 시간: **5분** 또는 **15분**")
         default_minutes = 5
-        progress_color = "green"
 
-    # 사용자 정의 분 설정
     duration_min = st.slider("⏱️ 타이머 설정 시간 (분 단위)", min_value=1, max_value=60, value=default_minutes)
-    
     total_seconds = duration_min * 60
 
-    # 타이머 구동 로직
     if st.button("🎬 타이머 시작하기", use_container_width=True):
-        st.warning(f"⏳ **{duration_min}분** 동안 {timer_mode} 타이머가 작동 중입니다. 다른 작업에 집중해 주세요!")
-        
-        # 간이 프로그레스 바 및 텍스트 자리 만들기
+        st.warning(f"⏳ **{duration_min}분** 동안 {timer_mode} 타이머가 작동 중입니다.")
         countdown_text = st.empty()
         progress_bar = st.progress(0.0)
         
-        # 초 단위 카운트다운 루프
         for remaining in range(total_seconds, -1, -1):
             mins, secs = divmod(remaining, 60)
             countdown_text.markdown(f"<h1 style='text-align: center; font-size: 60px;'>{mins:02d}:{secs:02d}</h1>", unsafe_allow_html=True)
-            
-            # 진행 상태 계산 (0.0 ~ 1.0)
             progress_ratio = (total_seconds - remaining) / total_seconds
             progress_bar.progress(progress_ratio)
-            
             time.sleep(1)
             
-        # 타이머 완료 시점
         st.balloons()
         if timer_mode == "🔥 집중/공부 모드":
             st.success("🎉 고생하셨습니다! 집중 시간이 끝났습니다. 이제 달콤한 휴식을 즐기세요!")
@@ -418,87 +404,129 @@ elif menu == "집중 및 휴식 타이머 ⏱️":
             st.success("📢 휴식 시간이 끝났습니다! 이제 다시 멋지게 집중 모드로 복귀해 볼까요?")
 
 # ==========================================
-# 5. 일일/주간 분석 리포트
+# 5. 일일/주간 분석 리포트 (★기록 조회 아카이브 보강★)
 # ==========================================
 elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
-    st.subheader("📅 나의 하루 감정 & 목표 달성률 달력")
-    now = datetime.now()
-    col_y, col_m = st.columns(2)
-    with col_y: select_year = st.selectbox("연도 선택", [2026, 2027], index=0)
-    with col_m: select_month = st.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
     
-    conn = sqlite3.connect(DB_FILE)
-    df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
-    df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
-    conn.close()
+    # 탭 기능 분리: 차트 대시보드 / 과거 기록 조회
+    tab1, tab2 = st.tabs(["📉 감정 통계 & 캘린더", "📜 과거 성찰 일기 & 하루 회고 모아보기"])
     
-    calendar_data_map = {}
-    for _, r in df_all_rev.iterrows():
-        try:
-            d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
-            if d_obj.year == select_year and d_obj.month == select_month:
-                if d_obj.day not in calendar_data_map:
-                    calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
-                calendar_data_map[d_obj.day]["emoji"] = r['repr_emoji']
-        except: pass
+    with tab1:
+        st.subheader("📅 나의 하루 감정 & 목표 달성률 달력")
+        now = datetime.now()
+        col_y, col_m = st.columns(2)
+        with col_y: select_year = st.selectbox("연도 선택", [2026, 2027], index=0)
+        with col_m: select_month = st.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
         
-    for _, g in df_all_goals.iterrows():
-        try:
-            d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
-            if d_obj.year == select_year and d_obj.month == select_month:
-                if d_obj.day not in calendar_data_map:
-                    calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
-                total = sum([1 for x in [g["today_goal_1"], g["today_goal_2"], g["week_habit_1"], g["week_habit_2"]] if x and x.strip() != ""])
-                done = sum([1 for t, d in [(g["today_goal_1"], g["today_goal_1_done"]), (g["today_goal_2"], g["today_goal_2_done"]), (g["week_habit_1"], g["week_habit_1_done"]), (g["week_habit_2"], g["week_habit_2_done"])] if t and t.strip() != "" and d == 1])
-                rate_percent = int((done / total) * 100) if total > 0 else 0
-                calendar_data_map[d_obj.day]["rate"] = rate_percent
-        except: pass
+        conn = sqlite3.connect(DB_FILE)
+        df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
+        df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
+        conn.close()
         
-    cal = calendar.monthcalendar(select_year, select_month)
-    days_headers = ["월", "화", "수", "목", "금", "토", "일"]
-    
-    cal_html = "<table style='width:100%; border-collapse: collapse; text-align:center; font-size:14px;'>"
-    cal_html += "<tr style='background-color:#f0f2f6; font-weight:bold;'>" + "".join([f"<th style='padding:8px; border:1px solid #ddd;'>{d}</th>" for d in days_headers]) + "</tr>"
-    
-    for week in cal:
-        cal_html += "<tr>"
-        for day in week:
-            if day == 0:
-                cal_html += "<td style='padding:15px; border:1px solid #ddd; background-color:#fafafa;'></td>"
-            else:
-                day_data = calendar_data_map.get(day, {"emoji": "⠀", "rate": None})
-                sticker = day_data["emoji"]
-                rate_str = f"<span style='font-size:11px; color:#2E7D32; font-weight:normal;'><br>🎯달성:{day_data['rate']}%</span>" if day_data["rate"] is not None else ""
-                
-                cal_html += f"<td style='padding:8px; border:1px solid #ddd; font-weight:bold; height:75px; vertical-align:top;'>"
-                cal_html += f"{day}<br><span style='font-size:20px;'>{sticker}</span>{rate_str}"
-                cal_html += f"</td>"
-        cal_html += "</tr>"
-    cal_html += "</table>"
-    
-    st.markdown(cal_html, unsafe_allow_html=True)
-    st.markdown("---")
-    
-    search_date = st.date_input("상세 타임라인 조회 날짜 선택", datetime.today())
-    conn = sqlite3.connect(DB_FILE)
-    df_emotion = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ?", conn, params=(str(search_date),))
-    conn.close()
-    
-    if not df_emotion.empty:
-        st.subheader(f"📅 {search_date} 시간대별 실시간 감정 스펙트럼")
-        rename_dict = {}
-        for old, new in [('depression','우울'),('anxiety','불안'),('anger','분노'),('joy','기쁨'),('fear','공포'),('dread','무서움')]:
-            if old in df_emotion.columns:
-                rename_dict[old] = new
-        df_emotion = df_emotion.rename(columns=rename_dict)
-        df_emotion = df_emotion.sort_values('time_slot')
+        calendar_data_map = {}
+        for _, r in df_all_rev.iterrows():
+            try:
+                d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
+                if d_obj.year == select_year and d_obj.month == select_month:
+                    if d_obj.day not in calendar_data_map:
+                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
+                    calendar_data_map[d_obj.day]["emoji"] = r['repr_emoji']
+            except: pass
+            
+        for _, g in df_all_goals.iterrows():
+            try:
+                d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
+                if d_obj.year == select_year and d_obj.month == select_month:
+                    if d_obj.day not in calendar_data_map:
+                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
+                    total = sum([1 for x in [g["today_goal_1"], g["today_goal_2"], g["week_habit_1"], g["week_habit_2"]] if x and x.strip() != ""])
+                    done = sum([1 for t, d in [(g["today_goal_1"], g["today_goal_1_done"]), (g["today_goal_2"], g["today_goal_2_done"]), (g["week_habit_1"], g["week_habit_1_done"]), (g["week_habit_2"], g["week_habit_2_done"])] if t and t.strip() != "" and d == 1])
+                    rate_percent = int((done / total) * 100) if total > 0 else 0
+                    calendar_data_map[d_obj.day]["rate"] = rate_percent
+            except: pass
+            
+        cal = calendar.monthcalendar(select_year, select_month)
+        days_headers = ["월", "화", "수", "목", "금", "토", "일"]
         
-        present_emotions = [c for c in ['우울', '불안', '분노', '기쁨', '공포', '무서움'] if c in df_emotion.columns]
-        df_melted = df_emotion.melt(id_vars=['time_slot'], value_vars=present_emotions, var_name='감정 종류', value_name='점수(%)')
+        cal_html = "<table style='width:100%; border-collapse: collapse; text-align:center; font-size:14px;'>"
+        cal_html += "<tr style='background-color:#f0f2f6; font-weight:bold;'>" + "".join([f"<th style='padding:8px; border:1px solid #ddd;'>{d}</th>" for d in days_headers]) + "</tr>"
         
-        fig_line = px.line(df_melted, x='time_slot', y='점수(%)', color='감정 종류', markers=True)
-        st.plotly_chart(fig_line, use_container_width=True)
+        for week in cal:
+            cal_html += "<tr>"
+            for day in week:
+                if day == 0:
+                    cal_html += "<td style='padding:15px; border:1px solid #ddd; background-color:#fafafa;'></td>"
+                else:
+                    day_data = calendar_data_map.get(day, {"emoji": "⠀", "rate": None})
+                    sticker = day_data["emoji"]
+                    rate_str = f"<span style='font-size:11px; color:#2E7D32; font-weight:normal;'><br>🎯달성:{day_data['rate']}%</span>" if day_data["rate"] is not None else ""
+                    
+                    cal_html += f"<td style='padding:8px; border:1px solid #ddd; font-weight:bold; height:75px; vertical-align:top;'>"
+                    cal_html += f"{day}<br><span style='font-size:20px;'>{sticker}</span>{rate_str}"
+                    cal_html += f"</td>"
+            cal_html += "</tr>"
+        cal_html += "</table>"
+        
+        st.markdown(cal_html, unsafe_allow_html=True)
+        st.markdown("---")
+        
+        search_date = st.date_input("상세 타임라인 조회 날짜 선택", datetime.today())
+        conn = sqlite3.connect(DB_FILE)
+        df_emotion = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ?", conn, params=(str(search_date),))
+        conn.close()
+        
+        if not df_emotion.empty:
+            st.subheader(f"📅 {search_date} 시간대별 실시간 감정 스펙트럼")
+            rename_dict = {}
+            for old, new in [('depression','우울'),('anxiety','불안'),('anger','분노'),('joy','기쁨'),('fear','공포'),('dread','무서움')]:
+                if old in df_emotion.columns:
+                    rename_dict[old] = new
+            df_emotion = df_emotion.rename(columns=rename_dict)
+            df_emotion = df_emotion.sort_values('time_slot')
+            
+            present_emotions = [c for c in ['우울', '불안', '분노', '기쁨', '공포', '무서움'] if c in df_emotion.columns]
+            df_melted = df_emotion.melt(id_vars=['time_slot'], value_vars=present_emotions, var_name='감정 종류', value_name='점수(%)')
+            
+            fig_line = px.line(df_melted, x='time_slot', y='점수(%)', color='감정 종류', markers=True)
+            st.plotly_chart(fig_line, use_container_width=True)
+
+    # 💡 [과거 기록 아카이브 보강]: 작성한 감정 성찰일지와 종합 회고를 날짜별로 항시 로드해 볼 수 있는 아카이브 뷰어 구현
+    with tab2:
+        st.subheader("📜 날짜별 전체 일지 아카이브 히스토리")
+        archive_date = st.date_input("조회할 날짜 선택", datetime.today(), key="archive_date_picker")
+        
+        conn = sqlite3.connect(DB_FILE)
+        df_emo_history = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ? ORDER BY time_slot ASC", conn, params=(str(archive_date),))
+        df_rev_history = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(str(archive_date),))
+        conn.close()
+        
+        st.markdown(f"### 📅 {archive_date} 기록 열람결과")
+        
+        # 1. 감정 성찰 일지 히스토리 출력
+        st.markdown("#### 🪵 시간대별 감정 성찰 일지")
+        if df_emo_history.empty:
+            st.info("해당 날짜에 작성된 시간대별 감정 성찰 기록이 없습니다.")
+        else:
+            for idx, row in df_emo_history.iterrows():
+                with st.expander(f"⏰ {row['time_slot']} | 표정 상태: {row['emotion_word']}"):
+                    st.write(f"**❓ 구실을 만들기 시작한 순간:**\n> {row['q1_moment']}")
+                    st.write(f"**❓ 내 머릿속을 스쳤던 생각:**\n> {row['q2_thought']}")
+                    st.write(f"**📊 감정 수치 상태:**\n- 기쁨: {row['joy']}% | 우울: {row['depression']}% | 불안: {row['anxiety']}% | 분노: {row['anger']}%")
+                    st.write(f"**🌱 인과 마주하기 문장:**\n- 그때 내가 구실을 만든 이유는 **[{row['sentence_reason']}]** 때문이다.\n- 하지만 그 결과 나는 **[{row['sentence_result']}]**를 느꼈다.")
+        
+        st.markdown("---")
+        
+        # 2. 종합 하루 회고 히스토리 출력
+        st.markdown("#### 🏁 마감 하루 종합 회고")
+        if df_rev_history.empty:
+            st.info("해당 날짜에 작성된 하루 마감 종합 회고가 없습니다. 일과 기록 메뉴 하단에서 작성할 수 있습니다.")
+        else:
+            rev_data = df_rev_history.iloc[0]
+            st.success(f"🎯 오늘 하루 전체적인 대표 이모티콘 상태: {rev_data['repr_emoji']}")
+            st.info(f"**🤔 1. 오늘의 반성**\n\n{rev_data['reflection']}")
+            st.warning(f"**🚀 2. 내일 더 나아지기 위해 할 것**\n\n{rev_data['improvement']}")
+            st.help(f"**🎉 3. 오늘의 칭찬**\n\n{rev_data['praise']}")
 
 # ==========================================
 # 6. 나만의 감정 극복법
