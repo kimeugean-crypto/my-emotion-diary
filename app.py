@@ -27,14 +27,21 @@ def init_db():
             PRIMARY KEY (date, time_slot)
         )
     ''')
-    # 24시간 일과 기록 테이블 (기존 오늘 일과 + 내일 예상/희망 일과 통합 관리)
-    # plan_type: 'actual'(오늘 실제), 'expected'(내일 예상), 'wanted'(내일 희망)
+    # 24시간 일과 기록 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_activities (
-            date TEXT, hour INTEGER, activity_type TEXT, memo TEXT, plan_type TEXT DEFAULT 'actual',
-            PRIMARY KEY (date, hour, plan_type)
+            date TEXT, hour INTEGER, activity_type TEXT, memo TEXT,
+            PRIMARY KEY (date, hour)
         )
     ''')
+    
+    # 🔥 [중요] 기존 구버전 DB에 plan_type 열이 없을 경우 에러 방지를 위해 강제 추가
+    try:
+        cursor.execute("ALTER TABLE daily_activities ADD COLUMN plan_type TEXT DEFAULT 'actual'")
+    except sqlite3.OperationalError:
+        # 이미 컬럼이 존재하는 경우(새로 생성되었거나 이미 패치된 경우) 패스
+        pass
+        
     # 하루 종합 회고 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_reviews (
@@ -116,7 +123,7 @@ def draw_clock_chart(df, title_label):
         customdata=df['activity_type']
     )])
     fig.update_layout(
-        title=dict(text=title_label, x=0.5, font=dict(size=16,面="bold")),
+        title=dict(text=title_label, x=0.5, font=dict(size=14, weight="bold")),
         showlegend=False, 
         margin=dict(t=50, b=20, l=20, r=20), 
         height=450
@@ -290,7 +297,7 @@ elif menu == "24시간 일과 기록":
             st.rerun()
 
     # ----------------------------------------------------
-    # 기존 기능: 목표 설정 및 주간 습관 / 오늘의 종합 하루 회고
+    # 목표 설정 및 주간 습관 / 오늘의 종합 하루 회고
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🎯 오늘의 목표 및 이번 주 습관 관리")
@@ -350,7 +357,7 @@ elif menu == "24시간 일과 기록":
         st.success("📝 하루 마감 데이터가 안전하게 저장되었습니다!")
 
     # ----------------------------------------------------
-    # 🔥 [새로운 추가 기능] 내일의 하루 설계 시뮬레이션 원그래프 2개
+    # 🔥 [추가 기능] 내일의 하루 설계 시뮬레이션 원그래프 2개
     # ----------------------------------------------------
     st.markdown("---")
     st.header("🔮 내일의 하루 미리 그려보기 (시뮬레이션)")
