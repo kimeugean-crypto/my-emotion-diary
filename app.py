@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 # ==========================================
 # 0. 데이터베이스(DB) 구조 업데이트 및 초기화
 # ==========================================
-DB_FILE = "emotion_diary_v11.db"
+# 기존 데이터를 보존하기 위해 v12 파일명을 그대로 유지합니다.
+DB_FILE = "emotion_diary_v12.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -25,6 +26,7 @@ def init_db():
             custom_emotions TEXT,
             q1_moment TEXT, q2_thought TEXT,
             sentence_reason TEXT, sentence_result TEXT,
+            affirmation TEXT,
             UNIQUE(date, time_slot)
         )
     ''')
@@ -164,7 +166,7 @@ if menu == "오늘의 감정 기록":
     st.subheader("🌱 5. 나를 다독이는 확언 한 줄")
     target_affirmation = "완벽하지 않아도 괜찮아. 나는 시도하고 있다."
     st.info(f"따라 쓰실 문장: **{target_affirmation}**")
-    user_affirmation = st.text_input("위 문장을 자유롭게 적거나 다짐을 입력해 보세요.", placeholder="편하게 적어보세요.")
+    user_affirmation = st.text_input("위 문장을 자유롭게 적거나 다짐을 입력해 보세요.", placeholder="나를 다독이는 따뜻한 말을 남겨주세요.")
 
     if st.button("🔓 모든 성찰 일기 저장하기", use_container_width=True):
         if not q1_moment.strip() or not q2_thought.strip():
@@ -178,17 +180,17 @@ if menu == "오늘의 감정 기록":
             
             cursor.execute('''
                 INSERT OR REPLACE INTO emotion_logs 
-                (date, time_slot, emotion_word, depression, anxiety, anger, joy, fear, dread, custom_emotions, q1_moment, q2_thought, sentence_reason, sentence_result)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (str(log_date), time_slot, chosen_emoji, depression, anxiety, anger, joy, fear, dread, custom_emotions_json, q1_moment, q2_thought, sentence_reason, sentence_result))
+                (date, time_slot, emotion_word, depression, anxiety, anger, joy, fear, dread, custom_emotions, q1_moment, q2_thought, sentence_reason, sentence_result, affirmation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(log_date), time_slot, chosen_emoji, depression, anxiety, anger, joy, fear, dread, custom_emotions_json, q1_moment, q2_thought, sentence_reason, sentence_result, user_affirmation.strip()))
             conn.commit()
             conn.close()
             
-            st.success(f"❤️ 대견합니다. {time_slot} 기준의 마음 성찰 기록이 안전하게 저장되었습니다.")
+            st.success(f"❤️ 대견합니다. {time_slot} 기준의 마음 성찰 기록 및 확언이 안전하게 저장되었습니다.")
             st.session_state.custom_emotion_count = 0
 
 # ==========================================
-# 3. 24시간 일과 기록 화면 (★집중 유형 초록색 세팅★)
+# 3. 24시간 일과 기록 화면
 # ==========================================
 elif menu == "24시간 일과 기록":
     st.header("🕒 24시간 타임 루프 기록")
@@ -218,7 +220,6 @@ elif menu == "24시간 일과 기록":
         
     df_act['display_text'] = df_act.apply(make_display_text, axis=1)
 
-    # 💡 [집중 컬러 변경]: "집중" 유형의 고유 색상을 주황색에서 선명하고 밝은 초록색(#2ECC71)으로 수정
     color_map = {"수면": "#4A90E2", "집중": "#2ECC71", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
     df_act['color'] = df_act['activity_type'].map(color_map)
 
@@ -404,12 +405,11 @@ elif menu == "집중 및 휴식 타이머 ⏱️":
             st.success("📢 휴식 시간이 끝났습니다! 이제 다시 멋지게 집중 모드로 복귀해 볼까요?")
 
 # ==========================================
-# 5. 일일/주간 분석 리포트 (★기록 조회 아카이브 보강★)
+# 5. 일일/주간 분석 리포트 (★달력 기상시간 연동 보강★)
 # ==========================================
 elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
     
-    # 탭 기능 분리: 차트 대시보드 / 과거 기록 조회
     tab1, tab2 = st.tabs(["📉 감정 통계 & 캘린더", "📜 과거 성찰 일기 & 하루 회고 모아보기"])
     
     with tab1:
@@ -422,15 +422,45 @@ elif menu == "일일/주간 분석 리포트":
         conn = sqlite3.connect(DB_FILE)
         df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
         df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
+        
+        # 💡 [기상시간 추적을 위한 데이터 추출]
+        df_all_acts = pd.read_sql_query("SELECT date, hour, activity_type FROM daily_activities ORDER BY date, hour ASC", conn)
         conn.close()
         
+        # 💡 [기상시간 계산 알고리즘]
+        # 보통 새벽에 자다가 아침(04:00 ~ 12:00 사이)에 처음으로 "수면"이 아닌 다른 행동 유형이 기록되는 정각 시간을 기상 시간으로 판단합니다.
+        wakeup_map = {}
+        if not df_all_acts.empty:
+            for g_date, group in df_all_acts.groupby('date'):
+                # 0시부터 23시까지 완벽히 채워진 리스트 생성
+                act_dict = {int(row['hour']): row['activity_type'] for _, row in group.iterrows()}
+                
+                detected_hour = None
+                # 새벽 4시부터 낮 12시까지 탐색하여, 직전 시간까지 수면 상태였다가 깨어나는 시점을 계산
+                for h in range(4, 13):
+                    prev_h = h - 1
+                    if act_dict.get(prev_h) == "수면" and act_dict.get(h) in ["집중", "핸드폰 및 딴짓", "미기록"]:
+                        detected_hour = h
+                        break
+                
+                if detected_hour is not None:
+                    wakeup_map[g_date] = f"{detected_hour:02d}:00"
+                else:
+                    # 예외처리: 만약 계속 수면이 아니었다가 아침 일찍 특정 일과가 기입된 경우 등 보완
+                    for h in range(4, 11):
+                        if act_dict.get(h) in ["집중", "핸드폰 및 딴짓"] and act_dict.get(h-1) == "수면":
+                            detected_hour = h
+                            break
+                    if detected_hour:
+                        wakeup_map[g_date] = f"{detected_hour:02d}:00"
+
         calendar_data_map = {}
         for _, r in df_all_rev.iterrows():
             try:
                 d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
                 if d_obj.year == select_year and d_obj.month == select_month:
                     if d_obj.day not in calendar_data_map:
-                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
+                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
                     calendar_data_map[d_obj.day]["emoji"] = r['repr_emoji']
             except: pass
             
@@ -439,11 +469,21 @@ elif menu == "일일/주간 분석 리포트":
                 d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
                 if d_obj.year == select_year and d_obj.month == select_month:
                     if d_obj.day not in calendar_data_map:
-                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
+                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
                     total = sum([1 for x in [g["today_goal_1"], g["today_goal_2"], g["week_habit_1"], g["week_habit_2"]] if x and x.strip() != ""])
                     done = sum([1 for t, d in [(g["today_goal_1"], g["today_goal_1_done"]), (g["today_goal_2"], g["today_goal_2_done"]), (g["week_habit_1"], g["week_habit_1_done"]), (g["week_habit_2"], g["week_habit_2_done"])] if t and t.strip() != "" and d == 1])
                     rate_percent = int((done / total) * 100) if total > 0 else 0
                     calendar_data_map[d_obj.day]["rate"] = rate_percent
+            except: pass
+            
+        # 💡 [매핑]: 기상 시간 달력 데이터 구조에 융합
+        for g_date, w_time in wakeup_map.items():
+            try:
+                d_obj = datetime.strptime(g_date, "%Y-%m-%d")
+                if d_obj.year == select_year and d_obj.month == select_month:
+                    if d_obj.day not in calendar_data_map:
+                        calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
+                    calendar_data_map[d_obj.day]["wakeup"] = w_time
             except: pass
             
         cal = calendar.monthcalendar(select_year, select_month)
@@ -458,12 +498,15 @@ elif menu == "일일/주간 분석 리포트":
                 if day == 0:
                     cal_html += "<td style='padding:15px; border:1px solid #ddd; background-color:#fafafa;'></td>"
                 else:
-                    day_data = calendar_data_map.get(day, {"emoji": "⠀", "rate": None})
+                    day_data = calendar_data_map.get(day, {"emoji": "⠀", "rate": None, "wakeup": None})
                     sticker = day_data["emoji"]
                     rate_str = f"<span style='font-size:11px; color:#2E7D32; font-weight:normal;'><br>🎯달성:{day_data['rate']}%</span>" if day_data["rate"] is not None else ""
                     
-                    cal_html += f"<td style='padding:8px; border:1px solid #ddd; font-weight:bold; height:75px; vertical-align:top;'>"
-                    cal_html += f"{day}<br><span style='font-size:20px;'>{sticker}</span>{rate_str}"
+                    # 💡 [달력 기상시간 렌더링]: 계산된 기상시간을 달력 일자 카드 내부에 이쁘게 배치
+                    wakeup_str = f"<span style='font-size:10px; color:#E67E22; font-weight:normal;'><br>🌅기상:{day_data['wakeup']}</span>" if day_data["wakeup"] is not None else ""
+                    
+                    cal_html += f"<td style='padding:8px; border:1px solid #ddd; font-weight:bold; height:85px; vertical-align:top;'>"
+                    cal_html += f"{day}<br><span style='font-size:18px;'>{sticker}</span>{rate_str}{wakeup_str}"
                     cal_html += f"</td>"
             cal_html += "</tr>"
         cal_html += "</table>"
@@ -491,7 +534,6 @@ elif menu == "일일/주간 분석 리포트":
             fig_line = px.line(df_melted, x='time_slot', y='점수(%)', color='감정 종류', markers=True)
             st.plotly_chart(fig_line, use_container_width=True)
 
-    # 💡 [과거 기록 아카이브 보강]: 작성한 감정 성찰일지와 종합 회고를 날짜별로 항시 로드해 볼 수 있는 아카이브 뷰어 구현
     with tab2:
         st.subheader("📜 날짜별 전체 일지 아카이브 히스토리")
         archive_date = st.date_input("조회할 날짜 선택", datetime.today(), key="archive_date_picker")
@@ -503,7 +545,6 @@ elif menu == "일일/주간 분석 리포트":
         
         st.markdown(f"### 📅 {archive_date} 기록 열람결과")
         
-        # 1. 감정 성찰 일지 히스토리 출력
         st.markdown("#### 🪵 시간대별 감정 성찰 일지")
         if df_emo_history.empty:
             st.info("해당 날짜에 작성된 시간대별 감정 성찰 기록이 없습니다.")
@@ -514,10 +555,12 @@ elif menu == "일일/주간 분석 리포트":
                     st.write(f"**❓ 내 머릿속을 스쳤던 생각:**\n> {row['q2_thought']}")
                     st.write(f"**📊 감정 수치 상태:**\n- 기쁨: {row['joy']}% | 우울: {row['depression']}% | 불안: {row['anxiety']}% | 분노: {row['anger']}%")
                     st.write(f"**🌱 인과 마주하기 문장:**\n- 그때 내가 구실을 만든 이유는 **[{row['sentence_reason']}]** 때문이다.\n- 하지만 그 결과 나는 **[{row['sentence_result']}]**를 느꼈다.")
+                    
+                    saved_affirmation = row['affirmation'] if 'affirmation' in row and row['affirmation'] else "작성된 확언이 없습니다."
+                    st.write(f"**💌 당시 나를 다독인 확언 한 줄:**\n> ✨ *{saved_affirmation}*")
         
         st.markdown("---")
         
-        # 2. 종합 하루 회고 히스토리 출력
         st.markdown("#### 🏁 마감 하루 종합 회고")
         if df_rev_history.empty:
             st.info("해당 날짜에 작성된 하루 마감 종합 회고가 없습니다. 일과 기록 메뉴 하단에서 작성할 수 있습니다.")
