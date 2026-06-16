@@ -5,17 +5,17 @@ import plotly.graph_objects as go
 import sqlite3
 import json
 import calendar
+import time
 from datetime import datetime, timedelta
 
 # ==========================================
 # 0. 데이터베이스(DB) 구조 업데이트 및 초기화
 # ==========================================
-DB_FILE = "emotion_diary_v9.db"
+DB_FILE = "emotion_diary_v10.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # 감정 로그 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS emotion_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +28,6 @@ def init_db():
             UNIQUE(date, time_slot)
         )
     ''')
-    # 일과 기록 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,21 +35,18 @@ def init_db():
             UNIQUE(date, hour)
         )
     ''')
-    # 종합 회고 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_reviews (
             date TEXT PRIMARY KEY,
             reflection TEXT, improvement TEXT, praise TEXT, repr_emoji TEXT
         )
     ''')
-    # 나만의 극복법 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS coping_strategies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT, strategy_text TEXT
         )
     ''')
-    # ★ 신규: 오늘의 목표 및 주간 습관 달성 기록 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_goals (
             date TEXT PRIMARY KEY,
@@ -71,9 +67,11 @@ init_db()
 st.set_page_config(page_title="마음 & 일과 추적기", layout="centered")
 st.title("🧠 내 마음과 하루 기록기")
 
+# 메뉴에 타이머 전용 메뉴 추가
 menu = st.sidebar.radio("메뉴 선택", [
     "오늘의 감정 기록", 
     "24시간 일과 기록", 
+    "집중 및 휴식 타이머 ⏱️", # 새로 추가된 메뉴
     "일일/주간 분석 리포트", 
     "나만의 감정 극복법"
 ])
@@ -107,19 +105,16 @@ if menu == "오늘의 감정 기록":
         time_slot = st.selectbox("기록 시간대 선택", hours_options)
         
     st.markdown("---")
-    
     st.subheader("1. 마음 들여다보기")
     q1_moment = st.text_area("❓ 내가 구실을 만들기 시작한 순간은 언제인가요?", placeholder="예: 해야 할 공부를 미루고 다른 것을 보려 할 때", height=70)
     q2_thought = st.text_area("❓ 그때 내 머릿속을 스쳤던 생각은 무엇인가요?", placeholder="예: '조금만 이따 해도 시간 충분해'", height=70)
     
     st.markdown("---")
-    
     st.subheader("2. 현재 내 표정 고르기")
     chosen_emoji = st.radio("지금 상태와 가장 어울리는 얼굴 이모티콘을 터치하세요", EMOJI_LIST, horizontal=True)
     st.markdown(f"<h1 style='text-align: center; font-size: 80px; margin: 0;'>{chosen_emoji}</h1>", unsafe_allow_html=True)
     
     st.markdown("---")
-    
     st.subheader("3. 감정 배터리 잔량 입력 (% 직접 기입)")
     c1, c2 = st.columns(2)
     with c1:
@@ -194,7 +189,7 @@ if menu == "오늘의 감정 기록":
             st.session_state.custom_emotion_count = 0
 
 # ==========================================
-# 3. 24시간 일과 기록 화면 + 목표/습관 설정 추가
+# 3. 24시간 일과 기록 화면
 # ==========================================
 elif menu == "24시간 일과 기록":
     st.header("🕒 24시간 타임 루프 기록")
@@ -214,7 +209,7 @@ elif menu == "24시간 일과 기록":
     
     df_act['activity_type'] = df_act['activity_type'].fillna("미기록")
     df_act['memo'] = df_act['memo'].fillna("")
-    df_act['size'] = 1
+    df_act['size'] = 1  
     
     def make_display_text(row):
         time_range = f"{int(row['hour']):02d}:00~{int(row['hour'])+1:02d}:00"
@@ -234,22 +229,21 @@ elif menu == "24시간 일과 기록":
         values=df_act['size'],
         marker=dict(colors=df_act['color'], line=dict(color='#FFFFFF', width=2)),
         hole=0.45,
-        sort=False,
-        direction='clockwise',
-        rotation=90,
-        textinfo='text',
-        text=df_act['display_text'],
-        textposition='inside',
-        insidetextorientation='radial',
+        sort=False,                      
+        direction='clockwise',           
+        rotation=90,                     
+        textinfo='text',                 
+        text=df_act['display_text'],      
+        textposition='inside',           
+        insidetextorientation='radial',  
         hovertemplate="<b>%{label}</b><br>유형: %{customdata}<extra></extra>",
         customdata=df_act['activity_type']
     )])
     
     fig_clock.update_layout(
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+        showlegend=False,                
         margin=dict(t=20, b=20, l=20, r=20),
-        height=500
+        height=520
     )
     
     selected_points = st.plotly_chart(fig_clock, use_container_width=True, on_select="rerun")
@@ -263,7 +257,7 @@ elif menu == "24시간 일과 기록":
     st.markdown("---")
     
     if target_hour is None:
-        st.info("💡 위의 시계 조각을 터치하거나 아래 메뉴를 열어 기록할 시간 범위를 직접 선택해 주세요.")
+        st.info("💡 위의 시계 조각을 직접 터치하거나 아래 메뉴를 통해 편집할 시간 범위를 정해주세요.")
         with st.expander("🔍 직접 시간 범위 선택해서 편집창 열기"):
             range_options = [f"{h:02d}:00~{h+1:02d}:00" for h in range(24)]
             select_range = st.selectbox("편집할 시간 범위 선택", range_options, index=0)
@@ -300,9 +294,7 @@ elif menu == "24시간 일과 기록":
 
     st.markdown("---")
     
-    # 🎯 ★ [신규 요구사항] 오늘의 목표 & 주간 습관 작성/달성 섹션 ★
     st.subheader("🎯 오늘의 목표 및 이번 주 습관 관리")
-    
     conn = sqlite3.connect(DB_FILE)
     df_goals = pd.read_sql_query("SELECT * FROM daily_goals WHERE date = ?", conn, params=(str(activity_date),))
     conn.close()
@@ -330,7 +322,6 @@ elif menu == "24시간 일과 기록":
         h2_text = st.text_input("주간 습관 2", value=g_data["week_habit_2"], placeholder="예: 외국어 단어 5개 암기")
         h2_done = st.checkbox("습관 2 오늘 실천 여부", value=bool(g_data["week_habit_2_done"]), key="h2")
 
-    # 실시간 현재 달성률 계산 미리보기
     total_goals_count = sum([1 for x in [g1_text, g2_text, h1_text, h2_text] if x.strip() != ""])
     done_goals_count = sum([1 for text, checked in [(g1_text, g1_done), (g2_text, g2_done), (h1_text, h1_done), (h2_text, h2_done)] if text.strip() != "" and checked])
     current_achievement_rate = int((done_goals_count / total_goals_count) * 100) if total_goals_count > 0 else 0
@@ -346,11 +337,9 @@ elif menu == "24시간 일과 기록":
         ''', (str(activity_date), g1_text, int(g1_done), g2_text, int(g2_done), h1_text, int(h1_done), h2_text, int(h2_done)))
         conn.commit()
         conn.close()
-        st.success("🎯 목표 및 습관 실천 데이터가 안전하게 저장되었습니다! 달력 리포트에서 확인해 보세요.")
+        st.success("🎯 목표 및 습관 데이터가 저장되었습니다!")
 
     st.markdown("---")
-    
-    # 오늘의 종합 하루 회고
     st.subheader("🏁 오늘의 종합 하루 회고")
     conn = sqlite3.connect(DB_FILE)
     df_rev = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(str(activity_date),))
@@ -375,30 +364,76 @@ elif menu == "24시간 일과 기록":
         ''', (str(activity_date), rev_reflection, rev_improvement, rev_praise, repr_emoji))
         conn.commit()
         conn.close()
-        st.success("📝 하루의 총평과 회고가 안전하게 마감되었습니다!")
+        st.success("📝 하루의 회고가 안전하게 마감되었습니다!")
 
 # ==========================================
-# 4. 일일/주간 분석 리포트 (★달력 내부 달성률 표시 연동★)
+# 4. [신규 추가] 집중 및 휴식 타이머 화면
+# ==========================================
+elif menu == "집중 및 휴식 타이머 ⏱️":
+    st.header("⏱️ 몰입과 휴식을 위한 마인드 타이머")
+    st.write("의도적인 집중과 확실한 휴식을 분리하여 시간을 지배해 보세요.")
+
+    # 두 가지 모드 선택
+    timer_mode = st.radio("⏰ 타이머 모드 선택", ["🔥 집중/공부 모드", "🌴 휴식/놀이 모드"], horizontal=True)
+
+    # 모드에 따른 추천 시간 세팅 및 가이드 문구 변경
+    if timer_mode == "🔥 집중/공부 모드":
+        st.info("💡 추천 집중 시간: **25분** (뽀모도로 기법)")
+        default_minutes = 25
+        progress_color = "orange"
+    else:
+        st.info("💡 추천 휴식 시간: **5분** 또는 **15분** (이 시간 이후에는 다시 일과로 복귀합니다)")
+        default_minutes = 5
+        progress_color = "green"
+
+    # 사용자 정의 분 설정
+    duration_min = st.slider("⏱️ 타이머 설정 시간 (분 단위)", min_value=1, max_value=60, value=default_minutes)
+    
+    total_seconds = duration_min * 60
+
+    # 타이머 구동 로직
+    if st.button("🎬 타이머 시작하기", use_container_width=True):
+        st.warning(f"⏳ **{duration_min}분** 동안 {timer_mode} 타이머가 작동 중입니다. 다른 작업에 집중해 주세요!")
+        
+        # 간이 프로그레스 바 및 텍스트 자리 만들기
+        countdown_text = st.empty()
+        progress_bar = st.progress(0.0)
+        
+        # 초 단위 카운트다운 루프
+        for remaining in range(total_seconds, -1, -1):
+            mins, secs = divmod(remaining, 60)
+            countdown_text.markdown(f"<h1 style='text-align: center; font-size: 60px;'>{mins:02d}:{secs:02d}</h1>", unsafe_allow_html=True)
+            
+            # 진행 상태 계산 (0.0 ~ 1.0)
+            progress_ratio = (total_seconds - remaining) / total_seconds
+            progress_bar.progress(progress_ratio)
+            
+            time.sleep(1)
+            
+        # 타이머 완료 시점
+        st.balloons()
+        if timer_mode == "🔥 집중/공부 모드":
+            st.success("🎉 고생하셨습니다! 집중 시간이 끝났습니다. 이제 달콤한 휴식을 즐기세요!")
+        else:
+            st.success("📢 휴식 시간이 끝났습니다! 이제 다시 멋지게 집중 모드로 복귀해 볼까요?")
+
+# ==========================================
+# 5. 일일/주간 분석 리포트
 # ==========================================
 elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
-    
     st.subheader("📅 나의 하루 감정 & 목표 달성률 달력")
     now = datetime.now()
     col_y, col_m = st.columns(2)
     with col_y: select_year = st.selectbox("연도 선택", [2026, 2027], index=0)
     with col_m: select_month = st.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
     
-    # DB 데이터 결합 조회
     conn = sqlite3.connect(DB_FILE)
     df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
     df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
     conn.close()
     
-    # 일자별 데이터 매핑 딕셔너리 생성
     calendar_data_map = {}
-    
-    # 1. 감정 이모티콘 매핑
     for _, r in df_all_rev.iterrows():
         try:
             d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
@@ -408,18 +443,14 @@ elif menu == "일일/주간 분석 리포트":
                 calendar_data_map[d_obj.day]["emoji"] = r['repr_emoji']
         except: pass
         
-    # 2. 목표 달성률 계산 및 매핑
     for _, g in df_all_goals.iterrows():
         try:
             d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
             if d_obj.year == select_year and d_obj.month == select_month:
                 if d_obj.day not in calendar_data_map:
                     calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None}
-                
-                # 등록된 텍스트가 있는 목표 개수와 완료 체크된 개수 산출
                 total = sum([1 for x in [g["today_goal_1"], g["today_goal_2"], g["week_habit_1"], g["week_habit_2"]] if x and x.strip() != ""])
                 done = sum([1 for t, d in [(g["today_goal_1"], g["today_goal_1_done"]), (g["today_goal_2"], g["today_goal_2_done"]), (g["week_habit_1"], g["week_habit_1_done"]), (g["week_habit_2"], g["week_habit_2_done"])] if t and t.strip() != "" and d == 1])
-                
                 rate_percent = int((done / total) * 100) if total > 0 else 0
                 calendar_data_map[d_obj.day]["rate"] = rate_percent
         except: pass
@@ -447,7 +478,6 @@ elif menu == "일일/주간 분석 리포트":
     cal_html += "</table>"
     
     st.markdown(cal_html, unsafe_allow_html=True)
-    st.caption("※ 달력에는 '24시간 일과 기록' 메뉴 하단에서 지정한 그날의 대표 이모지와 목표 달성률(%)이 실시간 통합 계산되어 출력됩니다.")
     st.markdown("---")
     
     search_date = st.date_input("상세 타임라인 조회 날짜 선택", datetime.today())
@@ -471,7 +501,7 @@ elif menu == "일일/주간 분석 리포트":
         st.plotly_chart(fig_line, use_container_width=True)
 
 # ==========================================
-# 5. 나만의 감정 극복법
+# 6. 나만의 감정 극복법
 # ==========================================
 elif menu == "나만의 감정 극복법":
     st.header("🩹 나만의 감정 극복 치트키 아카이브")
@@ -492,7 +522,6 @@ elif menu == "나만의 감정 극복법":
 
     st.markdown("---")
     st.subheader("📜 누적된 나만의 멘탈 치트키 리스트")
-    
     conn = sqlite3.connect(DB_FILE)
     df_strat = pd.read_sql_query("SELECT * FROM coping_strategies", conn)
     conn.close()
