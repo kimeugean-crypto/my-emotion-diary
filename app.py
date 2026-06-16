@@ -2,32 +2,75 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import sqlite3
+import json
 import calendar
 import time
 from datetime import datetime
 
 # ==========================================
-# 1. [로컬 전용] 데이터 구조 및 세션 상태 초기화
+# 1. 데이터베이스(DB) 파일 및 테이블 자동 초기화
 # ==========================================
-st.set_page_config(page_title="마음 & 일과 추적기 (로컬 저장형)", layout="centered")
+# 영구 저장을 위해 기기 내부에 고정 데이터베이스 파일을 생성합니다.
+DB_FILE = "local_emotion_diary_v1.db"
 
-# 로그인 정보 대신 기기 내부 메모리에 데이터를 저장할 구조를 정의합니다.
-if "USER_DATA" not in st.session_state:
-    st.session_state.USER_DATA = {
-        "emotion_logs": {},
-        "daily_activities": {},
-        "daily_reviews": {},
-        "coping_strategies": [],
-        "daily_goals": {}
-    }
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # 감정 성찰 기록 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS emotion_logs (
+            date TEXT, time_slot TEXT, emotion_word TEXT,
+            depression INTEGER, anxiety INTEGER, anger INTEGER,
+            joy INTEGER, fear INTEGER, dread INTEGER,
+            custom_emotions TEXT, q1_moment TEXT, q2_thought TEXT,
+            sentence_reason TEXT, sentence_result TEXT, affirmation TEXT,
+            PRIMARY KEY (date, time_slot)
+        )
+    ''')
+    # 24시간 일과 기록 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_activities (
+            date TEXT, hour INTEGER, activity_type TEXT, memo TEXT,
+            PRIMARY KEY (date, hour)
+        )
+    ''')
+    # 하루 종합 회고 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_reviews (
+            date TEXT PRIMARY KEY,
+            reflection TEXT, improvement TEXT, praise TEXT, repr_emoji TEXT
+        )
+    ''')
+    # 목표 및 습관 관리 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_goals (
+            date TEXT PRIMARY KEY,
+            today_goal_1 TEXT, today_goal_1_done INTEGER,
+            today_goal_2 TEXT, today_goal_2_done INTEGER,
+            week_habit_1 TEXT, week_habit_1_done INTEGER,
+            week_habit_2 TEXT, week_habit_2_done INTEGER
+        )
+    ''')
+    # 감정 극복 처방전 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS coping_strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT, strategy_text TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-USER_DATA = st.session_state.USER_DATA
+# 앱 실행 시 DB 세팅
+init_db()
 
 # ==========================================
 # 2. 공통 에셋 및 화면 레이아웃
 # ==========================================
+st.set_page_config(page_title="마음 & 일과 추적기 (로컬 영구 저장형)", layout="centered")
 st.title("🧠 내 마음과 하루 기록기")
-st.caption("🔒 본 기기의 브라우저에 데이터가 안전하게 보관되는 로컬 전용 모드입니다.")
+st.caption("🔒 본 기기 내부 하드디스크에 데이터가 안전하게 영구 보관되는 로컬 전용 모드입니다.")
 
 menu = st.sidebar.radio("메뉴 선택", [
     "오늘의 감정 기록", 
@@ -133,16 +176,18 @@ if menu == "오늘의 감정 기록":
         elif not sentence_reason.strip() or not sentence_result.strip():
             st.error("❌ 문장 빈칸 채우기(STEP 4)를 완료해 주세요!")
         else:
-            date_str = str(log_date)
-            if "emotion_logs" not in USER_DATA: USER_DATA["emotion_logs"] = {}
-            if date_str not in USER_DATA["emotion_logs"]: USER_DATA["emotion_logs"][date_str] = {}
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            custom_emotions_json = json.dumps(custom_emotions_data, ensure_ascii=False)
             
-            USER_DATA["emotion_logs"][date_str][time_slot] = {
-                "emotion_word": chosen_emoji, "depression": depression, "anxiety": anxiety,
-                "anger": anger, "joy": joy, "fear": fear, "dread": dread,
-                "custom_emotions": custom_emotions_data, "q1_moment": q1_moment, "q2_thought": q2_thought,
-                "sentence_reason": sentence_reason, "sentence_result": sentence_result, "affirmation": user_affirmation.strip()
-            }
+            cursor.execute('''
+                INSERT OR REPLACE INTO emotion_logs 
+                (date, time_slot, emotion_word, depression, anxiety, anger, joy, fear, dread, custom_emotions, q1_moment, q2_thought, sentence_reason, sentence_result, affirmation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (str(log_date), time_slot, chosen_emoji, depression, anxiety, anger, joy, fear, dread, custom_emotions_json, q1_moment, q2_thought, sentence_reason, sentence_result, user_affirmation.strip()))
+            conn.commit()
+            conn.close()
+            
             st.success(f"💾 기기 저장 완료! {time_slot} 기준의 감정 기록과 확언이 보관되었습니다.")
             st.session_state.custom_emotion_count = 0
 
@@ -154,12 +199,16 @@ elif menu == "24시간 일과 기록":
     activity_date = st.date_input("일과 기록 날짜 선택", datetime.today())
     date_str = str(activity_date)
     
-    if "daily_activities" not in USER_DATA: USER_DATA["daily_activities"] = {}
-    day_acts = USER_DATA["daily_activities"].get(date_str, {})
+    # DB에서 당일 일과 가져오기
+    conn = sqlite3.connect(DB_FILE)
+    df_db_act = pd.read_sql_query("SELECT hour, activity_type, memo FROM daily_activities WHERE date = ?", conn, params=(date_str,))
+    conn.close()
+    
+    db_acts = {row['hour']: {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_db_act.iterrows()}
     
     rows = []
     for h in range(24):
-        act_info = day_acts.get(str(h), {"activity_type": "미기록", "memo": ""})
+        act_info = db_acts.get(h, {"activity_type": "미기록", "memo": ""})
         rows.append({"hour": h, "activity_type": act_info["activity_type"], "memo": act_info["memo"], "size": 1})
     df_act = pd.DataFrame(rows)
     
@@ -215,16 +264,29 @@ elif menu == "24시간 일과 기록":
         memo_text = st.text_input("💡 이 시간대에 내가 한 일 기록하기 (비우고 저장하면 내용 삭제)", value=current_status['memo'])
         
         if st.button("💾 이 시간 조각 기기에 반영", use_container_width=True):
-            if date_str not in USER_DATA["daily_activities"]: USER_DATA["daily_activities"][date_str] = {}
-            USER_DATA["daily_activities"][date_str][str(target_hour)] = {"activity_type": act_type, "memo": memo_text}
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo)
+                VALUES (?, ?, ?, ?)
+            ''', (date_str, target_hour, act_type, memo_text))
+            conn.commit()
+            conn.close()
             st.success("✅ 시간 조각 데이터가 로컬에 업데이트되었습니다!")
             if "mobile_target_hour" in st.session_state: del st.session_state["mobile_target_hour"]
             st.rerun()
 
     st.markdown("---")
     st.subheader("🎯 오늘의 목표 및 이번 주 습관 관리")
-    if "daily_goals" not in USER_DATA: USER_DATA["daily_goals"] = {}
-    g_data = USER_DATA["daily_goals"].get(date_str, {"today_goal_1":"", "today_goal_1_done":0, "today_goal_2":"", "today_goal_2_done":0, "week_habit_1":"", "week_habit_1_done":0, "week_habit_2":"", "week_habit_2_done":0})
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_goals = pd.read_sql_query("SELECT * FROM daily_goals WHERE date = ?", conn, params=(date_str,))
+    conn.close()
+    
+    if not df_goals.empty:
+        g_data = df_goals.iloc[0].to_dict()
+    else:
+        g_data = {"today_goal_1":"", "today_goal_1_done":0, "today_goal_2":"", "today_goal_2_done":0, "week_habit_1":"", "week_habit_1_done":0, "week_habit_2":"", "week_habit_2_done":0}
                   
     col_g1, col_g2 = st.columns(2)
     with col_g1:
@@ -247,18 +309,25 @@ elif menu == "24시간 일과 기록":
     st.write(f"📊 현재 선택된 날짜의 실시간 목표 달성률: **{current_achievement_rate}%**")
 
     if st.button("💾 목표 및 습관 진행 상황 저장", use_container_width=True):
-        USER_DATA["daily_goals"][date_str] = {
-            "today_goal_1": g1_text, "today_goal_1_done": int(g1_done),
-            "today_goal_2": g2_text, "today_goal_2_done": int(g2_done),
-            "week_habit_1": h1_text, "week_habit_1_done": int(h1_done),
-            "week_habit_2": h2_text, "week_habit_2_done": int(h2_done)
-        }
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO daily_goals 
+            (date, today_goal_1, today_goal_1_done, today_goal_2, today_goal_2_done, week_habit_1, week_habit_1_done, week_habit_2, week_habit_2_done)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date_str, g1_text, int(g1_done), g2_text, int(g2_done), h1_text, int(h1_done), h2_text, int(h2_done)))
+        conn.commit()
+        conn.close()
         st.success("🎯 목표 데이터가 내부 메모리에 저장되었습니다!")
 
     st.markdown("---")
     st.subheader("🏁 오늘의 종합 하루 회고")
-    if "daily_reviews" not in USER_DATA: USER_DATA["daily_reviews"] = {}
-    exist_review = USER_DATA["daily_reviews"].get(date_str, {"reflection":"", "improvement":"", "praise":"", "repr_emoji":"😊"})
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_rev = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(date_str,))
+    conn.close()
+    
+    exist_review = df_rev.iloc[0].to_dict() if not df_rev.empty else {"reflection":"", "improvement":"", "praise":"", "repr_emoji":"😊"}
     
     rev_reflection = st.text_area("1. 🤔 오늘의 반성", value=exist_review.get("reflection", ""), placeholder="오늘 아쉬웠던 점을 적어주세요.")
     rev_improvement = st.text_area("2. 🚀 내일 더 나아지기 위해 할 것", value=exist_review.get("improvement", ""), placeholder="내일 시도해 볼 계획을 적어주세요.")
@@ -269,9 +338,14 @@ elif menu == "24시간 일과 기록":
     repr_emoji = st.selectbox("🎯 오늘 하루 나의 전체적인 상태 이모티콘 고르기", EMOJI_LIST, index=emoji_idx)
     
     if st.button("🔔 오늘의 종합 회고 저장 완료", use_container_width=True):
-        USER_DATA["daily_reviews"][date_str] = {
-            "reflection": rev_reflection, "improvement": rev_improvement, "praise": rev_praise, "repr_emoji": repr_emoji
-        }
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO daily_reviews (date, reflection, improvement, praise, repr_emoji)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (date_str, rev_reflection, rev_improvement, rev_praise, repr_emoji))
+        conn.commit()
+        conn.close()
         st.success("📝 하루 마감 데이터가 안전하게 저장되었습니다!")
 
 # ==========================================
@@ -303,17 +377,25 @@ elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
     tab1, tab2 = st.tabs(["📉 감정 통계 & 캘린더", "📜 과거 성찰 일기 & 하루 회고 모아보기"])
     
+    # DB에서 달력을 만들기 위한 데이터 일괄 로드
+    conn = sqlite3.connect(DB_FILE)
+    df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
+    df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
+    df_all_acts = pd.read_sql_query("SELECT date, hour, activity_type FROM daily_activities ORDER BY date, hour ASC", conn)
+    conn.close()
+    
+    # 💡 기상 시간 계산 알고리즘 수행
     wakeup_map = {}
-    act_logs = USER_DATA.get("daily_activities", {})
-    for g_date, hours_data in act_logs.items():
-        act_dict = {int(h): info["activity_type"] for h, info in hours_data.items()}
-        detected_hour = None
-        for h in range(4, 13):
-            if act_dict.get(h-1) == "수면" and act_dict.get(h) in ["집중", "핸드폰 및 딴짓", "미기록"]:
-                detected_hour = h
-                break
-        if detected_hour is not None:
-            wakeup_map[g_date] = f"{detected_hour:02d}:00"
+    if not df_all_acts.empty:
+        for g_date, group in df_all_acts.groupby('date'):
+            act_dict = {int(row['hour']): row['activity_type'] for _, row in group.iterrows()}
+            detected_hour = None
+            for h in range(4, 13):
+                if act_dict.get(h-1) == "수면" and act_dict.get(h) in ["집중", "핸드폰 및 딴짓", "미기록"]:
+                    detected_hour = h
+                    break
+            if detected_hour is not None:
+                wakeup_map[g_date] = f"{detected_hour:02d}:00"
 
     with tab1:
         st.subheader("📅 나의 하루 감정 & 목표 달성률 달력")
@@ -323,17 +405,17 @@ elif menu == "일일/주간 분석 리포트":
         select_month = col_m.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
         
         calendar_data_map = {}
-        for d_str, r in USER_DATA.get("daily_reviews", {}).items():
+        for _, r in df_all_rev.iterrows():
             try:
-                d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
                 if d_obj.year == select_year and d_obj.month == select_month:
                     if d_obj.day not in calendar_data_map: calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
                     calendar_data_map[d_obj.day]["emoji"] = r.get('repr_emoji', '😊')
             except: pass
             
-        for d_str, g in USER_DATA.get("daily_goals", {}).items():
+        for _, g in df_all_goals.iterrows():
             try:
-                d_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
                 if d_obj.year == select_year and d_obj.month == select_month:
                     if d_obj.day not in calendar_data_map: calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
                     total = sum([1 for x in [g.get("today_goal_1"), g.get("today_goal_2"), g.get("week_habit_1"), g.get("week_habit_2")] if x and x.strip() != ""])
@@ -368,14 +450,23 @@ elif menu == "일일/주간 분석 리포트":
         search_date = st.date_input("상세 타임라인 조회 날짜 선택", datetime.today())
         s_date_str = str(search_date)
         
-        day_emo = USER_DATA.get("emotion_logs", {}).get(s_date_str, {})
-        if day_emo:
+        conn = sqlite3.connect(DB_FILE)
+        df_emotion = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ?", conn, params=(s_date_str,))
+        conn.close()
+        
+        if not df_emotion.empty:
             st.subheader(f"📅 {search_date} 시간대별 실시간 감정 스펙트럼")
             emo_rows = []
-            for t_slot, info in day_emo.items():
+            for _, row in df_emotion.iterrows():
+                t_slot = row['time_slot']
+                # JSON 복원
+                try: cust_emo = json.loads(row['custom_emotions']) if row['custom_emotions'] else {}
+                except: cust_emo = {}
+                
                 for e_name in ['우울', '불안', '분노', '기쁨', '공포', '무서움']:
                     eng_name = {'우울':'depression','불안':'anxiety','분노':'anger','기쁨':'joy','공포':'fear','무서움':'dread'}[e_name]
-                    emo_rows.append({"time_slot": t_slot, "감정 종류": e_name, "점수(%)": info.get(eng_name, 0)})
+                    emo_rows.append({"time_slot": t_slot, "감정 종류": e_name, "점수(%)": row[eng_name]})
+            
             fig_line = px.line(pd.DataFrame(emo_rows).sort_values('time_slot'), x='time_slot', y='점수(%)', color='감정 종류', markers=True)
             st.plotly_chart(fig_line, use_container_width=True)
 
@@ -384,43 +475,53 @@ elif menu == "일일/주간 분석 리포트":
         archive_date = st.date_input("조회할 날짜 선택", datetime.today(), key="archive_date_picker")
         arc_str = str(archive_date)
         
+        conn = sqlite3.connect(DB_FILE)
+        df_emo_history = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ? ORDER BY time_slot ASC", conn, params=(arc_str,))
+        df_rev_history = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(arc_str,))
+        conn.close()
+        
         st.markdown(f"### 📅 {archive_date} 기록 열람결과")
         
         st.markdown("#### 🪵 시간대별 감정 성찰 일지")
-        day_emo_hist = USER_DATA.get("emotion_logs", {}).get(arc_str, {})
-        if not day_emo_hist:
+        if df_emo_history.empty:
             st.info("해당 날짜에 작성된 감정 성찰 기록이 없습니다.")
         else:
-            for t_slot, row in sorted(day_emo_hist.items()):
-                with st.expander(f"⏰ {t_slot} | 표정 상태: {row.get('emotion_word', '😊')}"):
-                    st.write(f"**❓ 구실을 만들기 시작한 순간:**\n> {row.get('q1_moment', '')}")
-                    st.write(f"**❓ 내 머릿속을 스쳤던 생각:**\n> {row.get('q2_thought', '')}")
-                    st.write(f"**📊 감정 수치 상태:**\n- 기쁨: {row.get('joy',0)}% | 우울: {row.get('depression',0)}% | 불안: {row.get('anxiety',0)}% | 분노: {row.get('anger',0)}%")
-                    st.write(f"**🌱 인과 마주하기 문장:**\n- 구실 이유: **[{row.get('sentence_reason','')}]** | 결과 감정: **[{row.get('sentence_result','')}]**")
-                    st.write(f"**💌 당시 나를 다독인 확언 한 줄:**\n> ✨ *{row.get('affirmation', '작성된 확언이 없습니다.')}*")
+            for idx, row in df_emo_history.iterrows():
+                t_slot = row['time_slot']
+                with st.expander(f"⏰ {t_slot} | 표정 상태: {row['emotion_word']}"):
+                    st.write(f"**❓ 구실을 만들기 시작한 순간:**\n> {row['q1_moment']}")
+                    st.write(f"**❓ 내 머릿속을 스쳤던 생각:**\n> {row['q2_thought']}")
+                    st.write(f"**📊 감정 수치 상태:**\n- 기쁨: {row['joy']}% | 우울: {row['depression']}% | 불안: {row['anxiety']}% | 분노: {row['anger']}%")
+                    st.write(f"**🌱 인과 마주하기 문장:**\n- 구실 이유: **[{row['sentence_reason']}]** | 결과 감정: **[{row['sentence_result']}]**")
+                    st.write(f"**💌 당시 나를 다독인 확언 한 줄:**\n> ✨ *{row['affirmation'] if row['affirmation'] else '작성된 확언이 없습니다.'}*")
                     
                     if st.button(f"🗑️ {t_slot} 감정 기록 지우기", key=f"del_emo_{t_slot}"):
-                        del USER_DATA["emotion_logs"][arc_str][t_slot]
-                        if not USER_DATA["emotion_logs"][arc_str]:
-                            del USER_DATA["emotion_logs"][arc_str]
+                        conn = sqlite3.connect(DB_FILE)
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM emotion_logs WHERE date = ? AND time_slot = ?", (arc_str, t_slot))
+                        conn.commit()
+                        conn.close()
                         st.success(f"👌 {t_slot}의 성찰 일기가 안전하게 지워졌습니다.")
                         time.sleep(1)
                         st.rerun()
         
         st.markdown("---")
-        
         st.markdown("#### 🏁 마감 하루 종합 회고")
-        rev_hist = USER_DATA.get("daily_reviews", {}).get(arc_str, {})
-        if not rev_hist:
+        if df_rev_history.empty:
             st.info("하루 종합 회고 기록이 없습니다.")
         else:
-            st.success(f"🎯 오늘 하루 전체적인 대표 이모티콘 상태: {rev_hist.get('repr_emoji', '😊')}")
-            st.info(f"**🤔 1. 오늘의 반성**\n\n{rev_hist.get('reflection', '')}")
-            st.warning(f"**🚀 2. 내일 더 나아지기 위해 할 것**\n\n{rev_hist.get('improvement', '')}")
-            st.info(f"**🎉 3. 오늘의 칭찬**\n\n{rev_hist.get('praise', '')}")
+            rev_hist = df_rev_history.iloc[0]
+            st.success(f"🎯 오늘 하루 전체적인 대표 이모티콘 상태: {rev_hist['repr_emoji']}")
+            st.info(f"**🤔 1. 오늘의 반성**\n\n{rev_hist['reflection']}")
+            st.warning(f"**🚀 2. 내일 더 나아지기 위해 할 것**\n\n{rev_hist['improvement']}")
+            st.info(f"**🎉 3. 오늘의 칭찬**\n\n{rev_hist['praise']}")
             
             if st.button("🗑️ 오늘의 종합 회고 전부 삭제하기", use_container_width=True):
-                del USER_DATA["daily_reviews"][arc_str]
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM daily_reviews WHERE date = ?", (arc_str,))
+                conn.commit()
+                conn.close()
                 st.success("👌 오늘의 종합 회고 일지가 완전히 삭제되었습니다.")
                 time.sleep(1)
                 st.rerun()
@@ -437,27 +538,38 @@ elif menu == "나만의 감정 극복법":
         submitted = st.form_submit_button("🚀 나만의 처방전에 등록하기")
         
         if submitted and strategy_text.strip():
-            if "coping_strategies" not in USER_DATA: USER_DATA["coping_strategies"] = []
-            USER_DATA["coping_strategies"].append({"category": category, "strategy_text": strategy_text.strip()})
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO coping_strategies (category, strategy_text) VALUES (?, ?)", (category, strategy_text.strip()))
+            conn.commit()
+            conn.close()
             st.success("🎯 나만의 멘탈 치트키가 추가되었습니다!")
 
     st.markdown("---")
     st.subheader("📜 누적된 나만의 멘탈 치트키 리스트")
-    strat_list = USER_DATA.get("coping_strategies", [])
-    if not strat_list:
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_strat = pd.read_sql_query("SELECT * FROM coping_strategies", conn)
+    conn.close()
+    
+    if df_strat.empty:
         st.info("등록된 극복 팁이 없습니다.")
     else:
         for cat in ["불안 극복법 😰", "우울 극복법 😥", "지루함 극복법 😑"]:
-            sub_items = [x for x in strat_list if x.get("category") == cat]
-            if sub_items:
+            sub_items = df_strat[df_strat['category'] == cat]
+            if not sub_items.empty:
                 st.markdown(f"#### **{cat}**")
-                for idx, item in enumerate(sub_items):
+                for idx, item in sub_items.iterrows():
                     c1, c2 = st.columns([0.85, 0.15])
                     with c1:
-                        st.info(f"✔️ {item.get('strategy_text', '')}")
+                        st.info(f"✔️ {item['strategy_text']}")
                     with c2:
-                        if st.button("❌ 삭제", key=f"del_strat_{cat}_{idx}"):
-                            USER_DATA["coping_strategies"].remove(item)
+                        if st.button("❌ 삭제", key=f"del_strat_{item['id']}"):
+                            conn = sqlite3.connect(DB_FILE)
+                            cursor = conn.cursor()
+                            cursor.execute("DELETE FROM coping_strategies WHERE id = ?", (int(item['id']),))
+                            conn.commit()
+                            conn.close()
                             st.success("삭제 완료!")
                             time.sleep(0.5)
                             st.rerun()
