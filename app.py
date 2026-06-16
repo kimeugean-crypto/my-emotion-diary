@@ -4,17 +4,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import sqlite3
 import json
+import calendar
 from datetime import datetime, timedelta
 
 # ==========================================
-# 0. 데이터베이스(DB) 구조 업데이트
+# 0. 데이터베이스(DB) 구조 업데이트 및 초기화
 # ==========================================
-DB_FILE = "emotion_diary_v6.db"
+DB_FILE = "emotion_diary_v7.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # 성찰 질문 및 필사 데이터 저장을 위한 테이블 스키마 확장
+    # 1. 감정 로그 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS emotion_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,12 +27,27 @@ def init_db():
             sentence_reason TEXT, sentence_result TEXT,
             UNIQUE(date, time_slot)
         )
-    ''')
+    ''');
+    # 2. 24시간 일과 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT, hour INTEGER, activity_type TEXT, memo TEXT,
             UNIQUE(date, hour)
+        )
+    ''')
+    # 3. 하루 회고 및 대표 이모지 테이블 (새로 추가)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_reviews (
+            date TEXT PRIMARY KEY,
+            reflection TEXT, improvement TEXT, praise TEXT, repr_emoji TEXT
+        )
+    ''')
+    # 4. 나만의 감정 극복법 테이블 (새로 추가)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS coping_strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT, strategy_text TEXT
         )
     ''')
     conn.commit()
@@ -40,69 +56,64 @@ def init_db():
 init_db()
 
 # ==========================================
-# 1. 프론트엔드 설정 및 공통 에셋
+# 1. 공통 에셋 및 설정
 # ==========================================
 st.set_page_config(page_title="마음 & 일과 추적기", layout="centered")
 st.title("🧠 내 마음과 하루 기록기")
 
-menu = st.sidebar.radio("메뉴 선택", ["오늘의 감정 기록", "24시간 일과 기록", "일일/주간 분석 리포트"])
+# 메뉴 확장 (극복 팁 메뉴 추가)
+menu = st.sidebar.radio("메뉴 선택", [
+    "오늘의 감정 기록", 
+    "24시간 일과 기록", 
+    "일일/주간 분석 리포트", 
+    "나만의 감정 극복법"
+])
 
-# 오직 이모티콘만 선택할 수 있도록 이모티콘 리스트 생성 (기능 2)
 EMOJI_LIST = ["😊", "🥳", "😎", "🥱", "😑", "😤", "😥", "😰", "😨", "🤔"]
 
-# 기능 3: 감정 성격에 맞춤화된 배터리 렌더러
 def render_custom_battery(label, score):
-    # 긍정적인 감정 목록
-    positive_emotions = ["기쁨", "joy", "Joy"]
-    
-    is_positive = any(pos in label for pos in positive_emotions)
-    
+    is_positive = "기쁨" in label or "joy" in label.lower()
     if is_positive:
-        # 긍정 감정: 높을수록 충전, 낮을수록 방전
         if score >= 80: status = "🔋 가득 참 (최상)"
         elif score >= 40: status = "🪫 중간 (유지 필요)"
         else: status = "🔌 방전 임박 (충전 필요!)"
     else:
-        # 부정 감정: 높을수록 방전 임박(위험), 낮을수록 안정
         if score >= 70: status = "🪫 방전 임박 (스트레스 과부하!)"
         elif score >= 35: status = "⚠️ 주의 (감정 소모 중)"
         else: status = "🔋 안정 (완만함)"
-        
     st.write(f"**{label}** : {score}% — *{status}*")
     st.progress(score / 100.0)
 
 # ==========================================
-# 2. [기능 개편] 오늘의 감정 기록 화면
+# 2. 오늘의 감정 기록 화면
 # ==========================================
 if menu == "오늘의 감정 기록":
     st.header("📝 오늘의 감정 성찰 기록")
     
-    # 1시간 단위 시간대 설정 (기능 1)
     col1, col2 = st.columns(2)
     with col1: 
         log_date = st.date_input("기록 날짜", datetime.today())
     with col2: 
-        hours_options = [f"{h:02d}:00 ~ {h+1:02d}:00" for h in range(24)]
-        time_slot = st.selectbox("기록 시간대 선택 (1시간 단위)", hours_options)
+        # 정시각 표현 옵션으로 수정 (요구사항 1)
+        hours_options = [f"{h:02d}:00" for h in range(24)]
+        time_slot = st.selectbox("기록 시간대 선택", hours_options)
         
     st.markdown("---")
     
-    # 기능 4: 감정 기록 이전 마음 성찰 질문
-    st.subheader("🧐 STEP 1. 마음 들여다보기")
-    q1_moment = st.text_area("❓ 내가 구실을 만들기 시작한 순간은 언제인가요?", placeholder="예: 운동을 가기 싫어서 날씨가 흐리다고 핑계 대기 시작했을 때", height=80)
-    q2_thought = st.text_area("❓ 그때 내 머릿속을 스쳤던 생각은 무엇인가요?", placeholder="예: '오늘 하루 안 가도 티 안 나잖아', '피곤한데 그냥 쉬자'", height=80)
+    st.subheader("1. 마음 들여다보기")
+    q1_moment = st.text_area("❓ 내가 구실을 만들기 시작한 순간은 언제인가요?", placeholder="예: 해야 할 공부를 미루고 다른 것을 보려 할 때", height=70)
+    q2_thought = st.text_area("❓ 그때 내 머릿속을 스쳤던 생각은 무엇인가요?", placeholder="예: '조금만 이따 해도 시간 충분해'", height=70)
     
     st.markdown("---")
     
-    # 기능 2: 단어 없는 순수 이모티콘 고르기
-    st.subheader("🎭 STEP 2. 현재 내 표정 고르기")
+    st.subheader("2. 현재 내 표정 고르기")
+    # 오직 이모티콘만 배치 (요구사항 2)
     chosen_emoji = st.radio("지금 상태와 가장 어울리는 얼굴 이모티콘을 터치하세요", EMOJI_LIST, horizontal=True)
-    st.markdown(f"<h1 style='text-align: center; font-size: 90px; margin: 10px 0;'>{chosen_emoji}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='text-align: center; font-size: 80px; margin: 0;'>{chosen_emoji}</h1>", unsafe_allow_html=True)
     
     st.markdown("---")
     
-    # 직접 수치 입력받기
-    st.subheader("🔋 STEP 3. 감정 배터리 잔량 입력 (% 직접 기입)")
+    st.subheader("3. 감정 배터리 잔량 입력 (% 직접 기입)")
     c1, c2 = st.columns(2)
     with c1:
         joy = st.number_input("기쁨 (Joy) %", 0, 100, 50, 5)
@@ -113,7 +124,6 @@ if menu == "오늘의 감정 기록":
         fear = st.number_input("공포 (Fear) %", 0, 100, 0, 5)
         dread = st.number_input("무서움 (Dread) %", 0, 100, 0, 5)
         
-    # 나만의 감정 추가 (동적 여러 개 기능 유지)
     if "custom_emotion_count" not in st.session_state:
         st.session_state.custom_emotion_count = 0
     if st.button("✨ 기본 외 나만의 감정 단어 추가하기"):
@@ -141,38 +151,27 @@ if menu == "오늘의 감정 기록":
         
     if custom_emotions_data:
         for name, score in custom_emotions_data.items():
-            # 커스텀 감정은 기본적으로 부정 카테고리로 간주하여 렌더링하되 이름에 '기쁨/행복'이 들어가면 긍정으로 처리
             render_custom_battery(name, score)
 
     st.markdown("---")
-    
-    # 기능 5: 감정 배터리 완료 후 인과 관계 문장 작성
-    st.subheader("✍️ STEP 4. 구실과 결과 마주하기")
-    st.write("아래 빈칸을 채워 완성된 문장을 만들어주세요.")
-    
+    st.subheader("4. 구실과 결과 마주하기")
     sc1, sc2 = st.columns(2)
-    with sc1:
-        sentence_reason = st.text_input("그때 내가 구실을 만든 이유는 [ ______ ] 때문이다.", placeholder="예: 실패하는 게 두려웠기")
-    with sc2:
-        sentence_result = st.text_input("하지만 그 결과 나는 [ ______ ]를 느꼈다.", placeholder="예: 마음 한구석의 찝찝함과 자책감")
+    with sc1: sentence_reason = st.text_input("그때 내가 구실을 만든 이유는 [ ______ ] 때문이다.", placeholder="예: 귀찮고 에너지가 부족했기")
+    with sc2: sentence_result = st.text_input("하지만 그 결과 나는 [ ______ ]를 느꼈다.", placeholder="예: 약간의 후회와 스트레스")
 
     st.markdown("---")
-    
-    # 기능 6: 자기 수용 확언 따라 쓰기 필사 코너
-    st.subheader("🌱 STEP 5. 나를 다독이는 확언 한 줄")
+    st.subheader("🌱 5. 나를 다독이는 확언 한 줄")
     target_affirmation = "완벽하지 않아도 괜찮아. 나는 시도하고 있다."
     st.info(f"따라 쓰실 문장: **{target_affirmation}**")
-    user_affirmation = st.text_input("위 문장을 아래에 똑같이 받아 적어주세요.", placeholder="여기에 정자로 똑같이 타이핑해 주세요.")
+    user_affirmation = st.text_input("위 문장을 자유롭게 적거나 다짐을 입력해 보세요.", placeholder="편하게 적어보세요.")
 
-    # 저장 프로세스 작동
     if st.button("🔓 모든 성찰 일기 저장하기", use_container_width=True):
         if not q1_moment.strip() or not q2_thought.strip():
-            st.error("❌ STEP 1의 성찰 질문 답변을 성실히 작성해 주세요!")
+            st.error("❌ 마음 성찰 질문(STEP 1)을 작성해 주세요!")
         elif not sentence_reason.strip() or not sentence_result.strip():
-            st.error("❌ STEP 4의 문장 빈칸 채우기를 완료해 주세요!")
-        elif user_affirmation.strip() != target_affirmation:
-            st.error("❌ STEP 5의 위로 문장을 정확하게 똑같이 입력해야 마음이 저장됩니다.")
+            st.error("❌ 문장 빈칸 채우기(STEP 4)를 완료해 주세요!")
         else:
+            # 완벽히 일치하지 않아도 무조건 패스 및 저장 (요구사항 2)
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             custom_emotions_json = json.dumps(custom_emotions_data, ensure_ascii=False)
@@ -185,15 +184,15 @@ if menu == "오늘의 감정 기록":
             conn.commit()
             conn.close()
             
-            st.success(f"❤️ 대견합니다! {time_slot} 의 마음 방 청소가 무사히 완료되어 기록되었습니다.")
+            st.success(f"❤️ 대견합니다. {time_slot} 기준의 마음 성찰 기록이 안전하게 저장되었습니다.")
             st.session_state.custom_emotion_count = 0
 
 # ==========================================
-# 3. 24시간 일과 기록 (원그래프 터치)
+# 3. 24시간 일과 기록 화면 (인터랙티브 조건 UI 및 하루 회고 추가)
 # ==========================================
 elif menu == "24시간 일과 기록":
     st.header("🕒 24시간 타임 루프 기록")
-    activity_date = st.date_input("일과 기록 날짜", datetime.today())
+    activity_date = st.date_input("일과 기록 날짜 선택", datetime.today())
     
     conn = sqlite3.connect(DB_FILE)
     df_act = pd.read_sql_query("SELECT * FROM daily_activities WHERE date = ?", conn, params=(str(activity_date),))
@@ -208,7 +207,7 @@ elif menu == "24시간 일과 기록":
         df_act['memo'] = ""
     df_act['activity_type'] = df_act['activity_type'].fillna("미기록")
     df_act['memo'] = df_act['memo'].fillna("")
-    df_act['label'] = df_act['hour'].apply(lambda x: f"{x:02d}시~{x+1:02d}시")
+    df_act['label'] = df_act['hour'].apply(lambda x: f"{x:02d}:00")
 
     color_map = {"수면": "blue", "집중": "yellow", "핸드폰 및 딴짓": "red", "미기록": "lightgray"}
     
@@ -217,81 +216,179 @@ elif menu == "24시간 일과 기록":
     
     fig_pie = px.pie(
         df_act, values='size', names='label', color='activity_type',
-        color_discrete_map=color_map, hole=0.5,
-        title=f"{activity_date} 하루 순환 도넛 차트"
+        color_discrete_map=color_map, hole=0.5, title=f"{activity_date} 일과 배치"
     )
     fig_pie.update_traces(textinfo='label', sort=False)
-    fig_pie.update_traces(customdata=df_act[['activity_type', 'memo']].values)
     
+    # 💡 그래프 인터랙션 트리거 설정 (요구사항 3)
     selected_points = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun")
     
-    target_hour = 0
-    if selected_points and "selection" in selected_points and "points" in selected_points["selection"] and len(selected_points["selection"]["points"]) > 0:
+    # 클릭 전에는 세션 상태나 변수가 비어있으므로 활성화 여부 체크
+    has_clicked = selected_points and "selection" in selected_points and "points" in selected_points["selection"] and len(selected_points["selection"]["points"]) > 0
+    
+    if has_clicked:
         point_index = selected_points["selection"]["points"][0]["point_number"]
         target_hour = int(df_act.iloc[point_index]['hour'])
-        st.success(f"🎯 원그래프에서 **[{target_hour:02d}시 ~ {target_hour+1:02d}시]** 블럭이 선택되었습니다.")
-    else:
-        st.markdown("---")
-        select_hour = st.selectbox("또는 기록할 시간대를 직접 선택하세요", [f"{h:02d}시 ~ {h+1:02d}시" for h in range(24)])
-        target_hour = int(select_hour.split("시")[0])
-
-    current_status = df_act[df_act['hour'] == target_hour].iloc[0]
-    st.markdown(f"### ✍️ {target_hour:02d}시 상태 편집")
-    
-    type_options = ["수면", "집중", "핸드폰 및 딴짓", "미기록"]
-    try: default_idx = type_options.index(current_status['activity_type'])
-    except: default_idx = 3
         
-    act_type = st.radio("유형 변경", type_options, index=default_idx)
-    memo_text = st.text_input("간단히 한 일 기록", value=current_status['memo'], key=f"act_memo_{target_hour}")
+        st.markdown(f"### ✍️ {target_hour:02d}:00 블럭 내용 기록 편집")
+        current_status = df_act[df_act['hour'] == target_hour].iloc[0]
+        
+        type_options = ["수면", "집중", "핸드폰 및 딴짓", "미기록"]
+        try: default_idx = type_options.index(current_status['activity_type'])
+        except: default_idx = 3
+            
+        act_type = st.radio("행동 유형 설정", type_options, index=default_idx)
+        memo_text = st.text_input("한 일 요약 기술", value=current_status['memo'])
+        
+        if st.button("💾 해당 시간 조각 저장하기", use_container_width=True):
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo)
+                VALUES (?, ?, ?, ?)
+            ''', (str(activity_date), target_hour, act_type, memo_text))
+            conn.commit()
+            conn.close()
+            st.success("조각 업데이트 성공!")
+            st.rerun()
+    else:
+        # 초기 화면 알림 (요구사항 3)
+        st.info("💡 위의 원그래프 조각 중에서 기록하고 싶은 시간대 블럭을 마우스나 손가락으로 툭 터치해 보세요! 편집창이 열립니다.")
+
+    st.markdown("---")
     
-    if st.button("💾 이 조각 저장하기", use_container_width=True):
+    # 💡 하루 총괄 회고 섹션 구축 (요구사항 4)
+    st.subheader("🏁 오늘의 종합 하루 회고")
+    
+    # 기존 데이터 로드 시도
+    conn = sqlite3.connect(DB_FILE)
+    df_rev = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(str(activity_date),))
+    conn.close()
+    
+    exist_review = df_rev.iloc[0] if not df_rev.empty else {"reflection":"", "improvement":"", "praise":"", "repr_emoji":"😊"}
+    
+    # 지정 질문 순서 배열
+    rev_reflection = st.text_area("1. 🤔 오늘의 반성", value=exist_review["reflection"], placeholder="오늘 아쉬웠던 점이나 고치고 싶은 행동을 적어주세요.")
+    rev_improvement = st.text_area("2. 🚀 내일 더 나아지기 위해 할 것", value=exist_review["improvement"], placeholder="내일 시도해 볼 작은 실행 계획을 적어주세요.")
+    rev_praise = st.text_area("3. 🎉 오늘의 칭찬", value=exist_review["praise"], placeholder="나 자신에게 건네는 따뜻한 칭찬 한마디를 적어주세요.")
+    
+    # 하루 총평 이모지 선택
+    try: emoji_idx = EMOJI_LIST.index(exist_review["repr_emoji"])
+    except: emoji_idx = 0
+    repr_emoji = st.selectbox("🎯 오늘 하루 나의 전체적인 상태 이모티콘 고르기", EMOJI_LIST, index=emoji_idx)
+    
+    if st.button("🔔 오늘의 종합 회고 저장 완료", use_container_width=True):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo)
-            VALUES (?, ?, ?, ?)
-        ''', (str(activity_date), target_hour, act_type, memo_text))
+            INSERT OR REPLACE INTO daily_reviews (date, reflection, improvement, praise, repr_emoji)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (str(activity_date), rev_reflection, rev_improvement, rev_praise, repr_emoji))
         conn.commit()
         conn.close()
-        st.success("저장 완료!")
-        st.rerun()
+        st.success("📝 하루의 총평과 회고가 안전하게 마감되었습니다!")
 
 # ==========================================
-# 4. 에러가 나지 않는 유연한 리포트 대시보드
+# 4. 일일/주간 분석 리포트 (시각적 감정 달력 기능 탑재)
 # ==========================================
 elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 분석 대시보드")
-    search_date = st.date_input("조회 날짜 선택", datetime.today())
     
+    # 💡 캘린더 모듈 시각화 전처리 (요구사항 5)
+    st.subheader("📅 나의 하루 감정 스티커 달력")
+    
+    now = datetime.now()
+    col_y, col_m = st.columns(2)
+    with col_y: select_year = st.selectbox("연도 선택", [2026, 2027], index=0)
+    with col_m: select_month = st.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
+    
+    # 해당 연/월의 모든 리뷰 데이터(대표 이모지 포함) 긁어오기
+    conn = sqlite3.connect(DB_FILE)
+    df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
+    conn.close()
+    
+    # 일별 이모지 맵 생성
+    emoji_calendar_map = {}
+    for _, r in df_all_rev.iterrows():
+        try:
+            d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
+            if d_obj.year == select_year and d_obj.month == select_month:
+                emoji_calendar_map[d_obj.day] = r['repr_emoji']
+        except: pass
+        
+    # 달력 배열 생성 (그리드 형태 레이아웃 출력)
+    cal = calendar.monthcalendar(select_year, select_month)
+    days_headers = ["월", "화", "수", "목", "금", "토", "일"]
+    
+    # 마크다운 표 테이블 구성
+    cal_html = "<table style='width:100%; border-collapse: collapse; text-align:center; font-size:16px;'>"
+    cal_html += "<tr style='background-color:#f0f2f6; font-weight:bold;'>" + "".join([f"<th style='padding:8px; border:1px solid #ddd;'>{d}</th>" for d in days_headers]) + "</tr>"
+    
+    for week in cal:
+        cal_html += "<tr>"
+        for day in week:
+            if day == 0:
+                cal_html += "<td style='padding:15px; border:1px solid #ddd; background-color:#fafafa;'></td>"
+            else:
+                sticker = emoji_calendar_map.get(day, "⠀") # 기록이 없으면 빈칸 문자 공백 처리
+                cal_html += f"<td style='padding:10px; border:1px solid #ddd; font-weight:bold;'>{day}<br><span style='font-size:22px;'>{sticker}</span></td>"
+        cal_html += "</tr>"
+    cal_html += "</table>"
+    
+    st.markdown(cal_html, unsafe_allow_html=True)
+    st.caption("※ 감정 스티커는 '24시간 일과 기록' 메뉴 하단 종합 회고에서 선택한 이모지가 연동되어 출력됩니다.")
+    st.markdown("---")
+    
+    # 아래 기존 분석 그래프 배치
+    search_date = st.date_input("상세 타임라인 조회 날짜 선택", datetime.today())
     conn = sqlite3.connect(DB_FILE)
     df_emotion = pd.read_sql_query("SELECT * FROM emotion_logs WHERE date = ?", conn, params=(str(search_date),))
     conn.close()
     
-    if df_emotion.empty:
-        st.warning("기록된 감정이 없습니다. 먼저 오늘 하루의 성찰 배터리를 채워주세요!")
-    else:
-        st.subheader(f"📅 {search_date} 시간대별 감정 스펙트럼")
-        
-        # 안전한 영어-한글 매핑 가공
-        df_emotion = df_emotion.rename(columns={
-            'depression': '우울', 'anxiety': '불안', 'anger': '분노',
-            'joy': '기쁨', 'fear': '공포', 'dread': '무서움'
-        })
+    if not df_emotion.empty:
+        st.subheader(f"📅 {search_date} 시간대별 실시간 감정 스펙트럼")
+        df_emotion = df_emotion.rename(columns={'depression':'우울','anxiety':'불안','anger':'분노','joy':'기쁨','fear':'공포','dread':'무서움'})
+        df_emotion = df_emotion.sort_values('time_slot')
         base_emotions = ['우울', '불안', '분노', '기쁨', '공포', '무서움']
-        
-        df_melted = df_emotion.melt(
-            id_vars=['time_slot', 'emotion_word'], value_vars=base_emotions, 
-            var_name='감정 종류', value_name='점수(%)'
-        )
+        df_melted = df_emotion.melt(id_vars=['time_slot'], value_vars=base_emotions, var_name='감정 종류', value_name='점수(%)')
         
         fig_line = px.line(df_melted, x='time_slot', y='점수(%)', color='감정 종류', markers=True)
-        fig_line.update_layout(yaxis=dict(range=[-5, 105]))
         st.plotly_chart(fig_line, use_container_width=True)
+
+# ==========================================
+# 5. 나만의 감정 극복 지침 데이터 보관소 (신설 메뉴)
+# ==========================================
+elif menu == "나만의 감정 극복법":
+    st.header("🩹 나만의 감정 극복 치트키 아카이브")
+    st.write("불안, 우울, 혹은 권태(지루함)가 찾아오는 위기 순간에 나를 구해줄 행동 강령을 축적해 두세요.")
+    
+    # 등록 폼
+    with st.form("strategy_form", clear_on_submit=True):
+        category = st.selectbox("어떤 감정을 물리칠 방법인가요?", ["불안 극복법 😰", "우울 극복법 😥", "지루함 극복법 😑"])
+        strategy_text = st.text_input("나에게 효과적인 나만의 구체적인 액션 지침은?", placeholder="예: 무작정 유튜브를 끄고 5분간 숨쉬기 운동하기, 좋아하는 노래 선곡하기")
+        submitted = st.form_submit_submit_button("🚀 나만의 처방전에 등록하기")
         
-        st.subheader("💭 오늘의 심리 성찰 기록 모아보기")
-        for _, row in df_emotion.iterrows():
-            with st.expander(f"⏰ {row['time_slot']} | 선택한 표정: {row['emotion_word']}"):
-                st.write(f"**순간:** {row['q1_moment']}")
-                st.write(f"**생각:** {row['q2_thought']}")
-                st.info(f"📝 *\"내가 구실을 만든 이유는 **{row['sentence_reason']}** 때문이다. 하지만 그 결과 나는 **{row['sentence_result']}**를 느꼈다.\"*")
+        if submitted and strategy_text.strip():
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO coping_strategies (category, strategy_text) VALUES (?, ?)", (category, strategy_text.strip()))
+            conn.commit()
+            conn.close()
+            st.success("🎯 나만의 멘탈 관리 처방전 데이터 리스트에 정상 추가되었습니다!")
+
+    st.markdown("---")
+    st.subheader("📜 누적된 나만의 멘탈 치트키 리스트")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_strat = pd.read_sql_query("SELECT * FROM coping_strategies", conn)
+    conn.close()
+    
+    if df_strat.empty:
+        st.info("아직 등록된 극복 팁이 없습니다. 힘이 되는 행동 수칙을 먼저 적어보세요!")
+    else:
+        for cat in ["불안 극복법 😰", "우울 극복법 😥", "지루함 극복법 😑"]:
+            sub_df = df_strat[df_strat['category'] == cat]
+            if not sub_df.empty:
+                st.markdown(f"#### **{cat}**")
+                for idx, row in sub_df.iterrows():
+                    st.info(f"✔️ {row['strategy_text']}")
