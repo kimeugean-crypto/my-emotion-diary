@@ -180,7 +180,7 @@ if menu == "오늘의 감정 기록":
             st.session_state.custom_emotion_count = 0
 
 # ==========================================
-# 3. 24시간 일과 기록 화면 (★모바일 터치 먹통 우회 패치 완료★)
+# 3. 24시간 일과 기록 화면 (★시계방향 회전 및 범위 표기 수정★)
 # ==========================================
 elif menu == "24시간 일과 기록":
     st.header("🕒 24시간 타임 루프 기록")
@@ -199,7 +199,9 @@ elif menu == "24시간 일과 기록":
         df_act['memo'] = ""
     df_act['activity_type'] = df_act['activity_type'].fillna("미기록")
     df_act['memo'] = df_act['memo'].fillna("")
-    df_act['label'] = df_act['hour'].apply(lambda x: f"{x:02d}:00")
+    
+    # 그래프 조각 레이블도 범위 형태로 통일하여 직관성 증가
+    df_act['label'] = df_act['hour'].apply(lambda x: f"{x:02d}:00~{x+1:02d}:00")
 
     color_map = {"수면": "blue", "집중": "yellow", "핸드폰 및 딴짓": "red", "미기록": "lightgray"}
     
@@ -210,38 +212,45 @@ elif menu == "24시간 일과 기록":
         df_act, values='size', names='label', color='activity_type',
         color_discrete_map=color_map, hole=0.5, title=f"{activity_date} 일과 배치"
     )
-    fig_pie.update_traces(textinfo='label', sort=False)
     
-    # 그래프 렌더링
+    # 💡 [요구사항 2] 그래프 정렬: 12시 방향(90도)에서 시작해서 오른쪽 시계방향(clockwise)으로 돌도록 설정
+    fig_pie.update_traces(
+        textinfo='label', 
+        sort=False, 
+        direction='clockwise', 
+        rotation=90
+    )
+    
     selected_points = st.plotly_chart(fig_pie, use_container_width=True, on_select="rerun")
     
-    # 💡 [핵심 패치] 모바일에서 터치가 먹히지 않을 때를 대비해 세션에 선택된 시간을 동적으로 매핑
     target_hour = None
 
-    # 1단계: 만약 원그래프 터치(클릭)가 정상 작동했다면 해당 시간 가져오기
+    # 1단계: 원그래프 블럭 터치 감지 시
     if selected_points and "selection" in selected_points and "points" in selected_points["selection"] and len(selected_points["selection"]["points"]) > 0:
         point_index = selected_points["selection"]["points"][0]["point_number"]
         target_hour = int(df_act.iloc[point_index]['hour'])
-        st.success(f"🎯 원그래프 터치 성공! **[{target_hour:02d}:00]** 블럭이 선택되었습니다.")
+        st.success(f"🎯 원그래프 터치 성공! **[{target_hour:02d}:00 ~ {target_hour+1:02d}:00]** 블럭이 선택되었습니다.")
 
     st.markdown("---")
     
-    # 2단계: 모바일 터치 인식을 못 한 초기 상태거나 먹통인 경우를 위해 '시간대 열기' 토글 배치
+    # 2단계: 터치가 안 되거나 초기 상태일 때 수동 선택 보완창
     if target_hour is None:
         st.info("💡 모바일 기기 종류에 따라 위 그래프 터치가 작동하지 않을 수 있습니다. 아래 버튼을 눌러 직접 시간대를 선택해 주세요.")
         with st.expander("🔍 터치 대신 직접 시간대 선택해서 편집창 열기"):
-            select_hour = st.selectbox("편집할 정시 선택", [f"{h:02d}:00" for h in range(24)], index=0)
+            # 💡 [요구사항 1] 정시 표기가 아닌 00:00~01:00 범위 형태로 옵션 제공
+            range_options = [f"{h:02d}:00~{h+1:02d}:00" for h in range(24)]
+            select_range = st.selectbox("편집할 시간 범위 선택", range_options, index=0)
             if st.button("🔓 선택한 시간 편집창 열기"):
-                st.session_state["mobile_target_hour"] = int(select_hour.split(":")[0])
+                # 시작 시간 숫자만 파싱 (ex: "01:00~02:00" -> 1)
+                st.session_state["mobile_target_hour"] = int(select_range.split(":")[0])
         
-        # 세션에 저장된 수동 시간대가 있다면 그걸 타겟으로 설정
         if "mobile_target_hour" in st.session_state:
             target_hour = st.session_state["mobile_target_hour"]
 
-    # 💡 3단계: 초기 화면에는 안 나왔다가 터치든 버튼 클릭이든 '시간대'가 명확히 정해지면 편집창 등장! (요구사항 3)
+    # 3단계: 시간대가 정해지면 편집창 등장
     if target_hour is not None:
         current_status = df_act[df_act['hour'] == target_hour].iloc[0]
-        st.markdown(f"### ✍️ {target_hour:02d}:00 블럭 내용 기록 편집")
+        st.markdown(f"### ✍️ {target_hour:02d}:00 ~ {target_hour+1:02d}:00 내용 기록 편집")
         
         type_options = ["수면", "집중", "핸드폰 및 딴짓", "미기록"]
         try: default_idx = type_options.index(current_status['activity_type'])
@@ -259,8 +268,7 @@ elif menu == "24시간 일과 기록":
             ''', (str(activity_date), target_hour, act_type, memo_text))
             conn.commit()
             conn.close()
-            st.success(f"💾 {target_hour:02d}:00 정보가 성공적으로 반영되었습니다!")
-            # 초기화 후 새로고침
+            st.success(f"💾 {target_hour:02d}:00 ~ {target_hour+1:02d}:00 정보가 반영되었습니다!")
             if "mobile_target_hour" in st.session_state:
                 del st.session_state["mobile_target_hour"]
             st.rerun()
