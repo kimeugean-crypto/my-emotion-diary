@@ -6,12 +6,11 @@ import sqlite3
 import json
 import calendar
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. 데이터베이스(DB) 파일 및 테이블 자동 초기화
 # ==========================================
-# 영구 저장을 위해 기기 내부에 고정 데이터베이스 파일을 생성합니다.
 DB_FILE = "local_emotion_diary_v1.db"
 
 def init_db():
@@ -28,11 +27,12 @@ def init_db():
             PRIMARY KEY (date, time_slot)
         )
     ''')
-    # 24시간 일과 기록 테이블
+    # 24시간 일과 기록 테이블 (기존 오늘 일과 + 내일 예상/희망 일과 통합 관리)
+    # plan_type: 'actual'(오늘 실제), 'expected'(내일 예상), 'wanted'(내일 희망)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_activities (
-            date TEXT, hour INTEGER, activity_type TEXT, memo TEXT,
-            PRIMARY KEY (date, hour)
+            date TEXT, hour INTEGER, activity_type TEXT, memo TEXT, plan_type TEXT DEFAULT 'actual',
+            PRIMARY KEY (date, hour, plan_type)
         )
     ''')
     # 하루 종합 회고 테이블
@@ -81,6 +81,7 @@ menu = st.sidebar.radio("메뉴 선택", [
 ])
 
 EMOJI_LIST = ["😊", "🥳", "😎", "🥱", "😑", "😤", "😥", "😰", "😨", "🤔"]
+COLOR_MAP = {"수면": "#4A90E2", "집중": "#2ECC71", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
 
 def render_custom_battery(label, score):
     is_positive = "기쁨" in label or "joy" in label.lower()
@@ -94,6 +95,33 @@ def render_custom_battery(label, score):
         else: status = "🔋 안정 (완만함)"
     st.write(f"**{label}** : {score}% — *{status}*")
     st.progress(score / 100.0)
+
+# 시계 그래프를 그려주는 공통 함수
+def draw_clock_chart(df, title_label):
+    def make_display_text(row):
+        time_range = f"{int(row['hour']):02d}:00~{int(row['hour'])+1:02d}:00"
+        if row['memo'] and row['memo'].strip() != "":
+            return f"{time_range}<br><b>📝 {row['memo']}</b>"
+        return f"{time_range}"
+        
+    df['display_text'] = df.apply(make_display_text, axis=1)
+    df['color'] = df['activity_type'].map(COLOR_MAP)
+
+    fig = go.Figure(data=[go.Pie(
+        labels=df['display_text'], values=df['size'],
+        marker=dict(colors=df['color'], line=dict(color='#FFFFFF', width=2)),
+        hole=0.45, sort=False, direction='clockwise', rotation=90,
+        textinfo='text', text=df['display_text'], textposition='inside',
+        insidetextorientation='radial', hovertemplate="<b>%{label}</b><br>유형: %{customdata}<extra></extra>",
+        customdata=df['activity_type']
+    )])
+    fig.update_layout(
+        title=dict(text=title_label, x=0.5, font=dict(size=16,面="bold")),
+        showlegend=False, 
+        margin=dict(t=50, b=20, l=20, r=20), 
+        height=450
+    )
+    return fig
 
 # ==========================================
 # 3. 오늘의 감정 기록 화면
@@ -199,94 +227,77 @@ elif menu == "24시간 일과 기록":
     activity_date = st.date_input("일과 기록 날짜 선택", datetime.today())
     date_str = str(activity_date)
     
-    # DB에서 당일 일과 가져오기
+    # ----------------------------------------------------
+    # [그래프 1] 오늘의 실제 시간 시계 원그래프 로드 및 시각화
+    # ----------------------------------------------------
     conn = sqlite3.connect(DB_FILE)
-    df_db_act = pd.read_sql_query("SELECT hour, activity_type, memo FROM daily_activities WHERE date = ?", conn, params=(date_str,))
+    df_db_act = pd.read_sql_query("SELECT hour, activity_type, memo FROM daily_activities WHERE date = ? AND plan_type = 'actual'", conn, params=(date_str,))
     conn.close()
     
     db_acts = {row['hour']: {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_db_act.iterrows()}
-    
     rows = []
     for h in range(24):
         act_info = db_acts.get(h, {"activity_type": "미기록", "memo": ""})
         rows.append({"hour": h, "activity_type": act_info["activity_type"], "memo": act_info["memo"], "size": 1})
     df_act = pd.DataFrame(rows)
     
-    def make_display_text(row):
-        time_range = f"{int(row['hour']):02d}:00~{int(row['hour'])+1:02d}:00"
-        if row['memo'] and row['memo'].strip() != "":
-            return f"{time_range}<br><b>📝 {row['memo']}</b>"
-        return f"{time_range}"
-        
-    df_act['display_text'] = df_act.apply(make_display_text, axis=1)
-    color_map = {"수면": "#4A90E2", "집중": "#2ECC71", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
-    df_act['color'] = df_act['activity_type'].map(color_map)
-
-    st.subheader("📊 오늘의 시간 시계 원그래프")
-    fig_clock = go.Figure(data=[go.Pie(
-        labels=df_act['display_text'], values=df_act['size'],
-        marker=dict(colors=df_act['color'], line=dict(color='#FFFFFF', width=2)),
-        hole=0.45, sort=False, direction='clockwise', rotation=90,
-        textinfo='text', text=df_act['display_text'], textposition='inside',
-        insidetextorientation='radial', hovertemplate="<b>%{label}</b><br>유형: %{customdata}<extra></extra>",
-        customdata=df_act['activity_type']
-    )])
-    fig_clock.update_layout(showlegend=False, margin=dict(t=20, b=20, l=20, r=20), height=520)
+    st.subheader("📊 오늘의 실제 시간 시계 원그래프")
+    fig_clock = draw_clock_chart(df_act, "오늘의 실제 행동 조각")
+    selected_points = st.plotly_chart(fig_clock, use_container_width=True, on_select="rerun", key="today_clock_chart")
     
-    selected_points = st.plotly_chart(fig_clock, use_container_width=True, on_select="rerun")
     target_hour = None
+    target_plan_type = "actual"
 
     if selected_points and "selection" in selected_points and "points" in selected_points["selection"] and len(selected_points["selection"]["points"]) > 0:
         point_index = selected_points["selection"]["points"][0]["point_number"]
         target_hour = int(df_act.iloc[point_index]['hour'])
-        st.success(f"🎯 선택된 블럭: **[{target_hour:02d}:00 ~ {target_hour+1:02d}:00]**")
+        target_plan_type = "actual"
+        st.success(f"🎯 [오늘 실제 일과] 선택된 블럭: **[{target_hour:02d}:00 ~ {target_hour+1:02d}:00]**")
 
-    st.markdown("---")
+    # 오늘 일과 직접 편집 확장 창
     if target_hour is None:
-        st.info("💡 위의 시계 조각을 직접 터치하거나 아래 메뉴를 통해 편집할 시간 범위를 정해주세요.")
-        with st.expander("🔍 직접 시간 범위 선택해서 편집창 열기"):
+        with st.expander("🔍 [오늘 실제 일과] 시간 직접 선택해서 편집하기"):
             range_options = [f"{h:02d}:00~{h+1:02d}:00" for h in range(24)]
-            select_range = st.selectbox("편집할 시간 범위 선택", range_options, index=0)
-            if st.button("🔓 선택한 시간 편집창 열기"):
+            select_range = st.selectbox("편집할 시간 범위 선택", range_options, index=0, key="today_select_box")
+            if st.button("🔓 선택한 시간 편집창 열기", key="today_open_btn"):
                 st.session_state["mobile_target_hour"] = int(select_range.split(":")[0])
-        if "mobile_target_hour" in st.session_state:
-            target_hour = st.session_state["mobile_target_hour"]
+                st.session_state["mobile_target_type"] = "actual"
+        if st.session_state.get("mobile_target_type") == "actual":
+            target_hour = st.session_state.get("mobile_target_hour")
+            target_plan_type = "actual"
 
-    if target_hour is not None:
+    # 오늘 일과 저장 세션
+    if target_hour is not None and target_plan_type == "actual":
         current_status = df_act[df_act['hour'] == target_hour].iloc[0]
-        st.markdown(f"### ✍️ {target_hour:02d}:00 ~ {target_hour+1:02d}:00 내용 기록 편집 / 초기화")
-        
+        st.markdown(f"### ✍️ 오늘 실제 일과 [{target_hour:02d}:00 ~ {target_hour+1:02d}:00] 편집")
         type_options = ["수면", "집중", "핸드폰 및 딴짓", "미기록"]
-        try: default_idx = type_options.index(current_status['activity_type'])
-        except: default_idx = 3
-            
-        act_type = st.radio("행동 유형 설정(색상 변경)", type_options, index=default_idx)
-        memo_text = st.text_input("💡 이 시간대에 내가 한 일 기록하기 (비우고 저장하면 내용 삭제)", value=current_status['memo'])
+        default_idx = type_options.index(current_status['activity_type']) if current_status['activity_type'] in type_options else 3
+        act_type = st.radio("행동 유형 설정", type_options, index=default_idx, key="today_radio_act")
+        memo_text = st.text_input("💡 내가 실제 한 일 기록 (비우면 삭제)", value=current_status['memo'], key="today_memo_act")
         
-        if st.button("💾 이 시간 조각 기기에 반영", use_container_width=True):
+        if st.button("💾 이 시간 조각 오늘 일과에 반영", use_container_width=True, key="today_save_btn"):
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo)
-                VALUES (?, ?, ?, ?)
+                INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo, plan_type)
+                VALUES (?, ?, ?, ?, 'actual')
             ''', (date_str, target_hour, act_type, memo_text))
             conn.commit()
             conn.close()
-            st.success("✅ 시간 조각 데이터가 로컬에 업데이트되었습니다!")
+            st.success("✅ 오늘의 실제 시간 조각이 저장되었습니다!")
             if "mobile_target_hour" in st.session_state: del st.session_state["mobile_target_hour"]
+            if "mobile_target_type" in st.session_state: del st.session_state["mobile_target_type"]
             st.rerun()
 
+    # ----------------------------------------------------
+    # 기존 기능: 목표 설정 및 주간 습관 / 오늘의 종합 하루 회고
+    # ----------------------------------------------------
     st.markdown("---")
     st.subheader("🎯 오늘의 목표 및 이번 주 습관 관리")
-    
     conn = sqlite3.connect(DB_FILE)
     df_goals = pd.read_sql_query("SELECT * FROM daily_goals WHERE date = ?", conn, params=(date_str,))
     conn.close()
-    
-    if not df_goals.empty:
-        g_data = df_goals.iloc[0].to_dict()
-    else:
-        g_data = {"today_goal_1":"", "today_goal_1_done":0, "today_goal_2":"", "today_goal_2_done":0, "week_habit_1":"", "week_habit_1_done":0, "week_habit_2":"", "week_habit_2_done":0}
+    g_data = df_goals.iloc[0].to_dict() if not df_goals.empty else {"today_goal_1":"","today_goal_1_done":0,"today_goal_2":"","today_goal_2_done":0,"week_habit_1":"","week_habit_1_done":0,"week_habit_2":"","week_habit_2_done":0}
                   
     col_g1, col_g2 = st.columns(2)
     with col_g1:
@@ -295,7 +306,6 @@ elif menu == "24시간 일과 기록":
         g1_done = st.checkbox("목표 1 완료 여부", value=bool(g_data.get("today_goal_1_done", 0)), key="g1")
         g2_text = st.text_input("목표 2", value=g_data.get("today_goal_2", ""), placeholder="예: 홈트레이닝 30분")
         g2_done = st.checkbox("목표 2 완료 여부", value=bool(g_data.get("today_goal_2_done", 0)), key="g2")
-        
     with col_g2:
         st.markdown("##### 🌱 이번 주 습관으로 만들 목표")
         h1_text = st.text_input("주간 습관 1", value=g_data.get("week_habit_1", ""), placeholder="예: 아침 물 한 잔 마시기")
@@ -303,36 +313,27 @@ elif menu == "24시간 일과 기록":
         h2_text = st.text_input("주간 습관 2", value=g_data.get("week_habit_2", ""), placeholder="예: 외국어 단어 5개 암기")
         h2_done = st.checkbox("습관 2 오늘 실천 여부", value=bool(g_data.get("week_habit_2_done", 0)), key="h2")
 
-    total_goals_count = sum([1 for x in [g1_text, g2_text, h1_text, h2_text] if x.strip() != ""])
-    done_goals_count = sum([1 for text, checked in [(g1_text, g1_done), (g2_text, g2_done), (h1_text, h1_done), (h2_text, h2_done)] if text.strip() != "" and checked])
-    current_achievement_rate = int((done_goals_count / total_goals_count) * 100) if total_goals_count > 0 else 0
-    st.write(f"📊 현재 선택된 날짜의 실시간 목표 달성률: **{current_achievement_rate}%**")
-
     if st.button("💾 목표 및 습관 진행 상황 저장", use_container_width=True):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO daily_goals 
-            (date, today_goal_1, today_goal_1_done, today_goal_2, today_goal_2_done, week_habit_1, week_habit_1_done, week_habit_2, week_habit_2_done)
+            INSERT OR REPLACE INTO daily_goals (date, today_goal_1, today_goal_1_done, today_goal_2, today_goal_2_done, week_habit_1, week_habit_1_done, week_habit_2, week_habit_2_done)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (date_str, g1_text, int(g1_done), g2_text, int(g2_done), h1_text, int(h1_done), h2_text, int(h2_done)))
         conn.commit()
         conn.close()
-        st.success("🎯 목표 데이터가 내부 메모리에 저장되었습니다!")
+        st.success("🎯 목표 데이터가 성공적으로 저장되었습니다!")
 
     st.markdown("---")
     st.subheader("🏁 오늘의 종합 하루 회고")
-    
     conn = sqlite3.connect(DB_FILE)
     df_rev = pd.read_sql_query("SELECT * FROM daily_reviews WHERE date = ?", conn, params=(date_str,))
     conn.close()
-    
     exist_review = df_rev.iloc[0].to_dict() if not df_rev.empty else {"reflection":"", "improvement":"", "praise":"", "repr_emoji":"😊"}
     
     rev_reflection = st.text_area("1. 🤔 오늘의 반성", value=exist_review.get("reflection", ""), placeholder="오늘 아쉬웠던 점을 적어주세요.")
     rev_improvement = st.text_area("2. 🚀 내일 더 나아지기 위해 할 것", value=exist_review.get("improvement", ""), placeholder="내일 시도해 볼 계획을 적어주세요.")
     rev_praise = st.text_area("3. 🎉 오늘의 칭찬", value=exist_review.get("praise", ""), placeholder="나 자신에게 건네는 따뜻한 칭찬 한마디를 적어주세요.")
-    
     try: emoji_idx = EMOJI_LIST.index(exist_review.get("repr_emoji", "😊"))
     except: emoji_idx = 0
     repr_emoji = st.selectbox("🎯 오늘 하루 나의 전체적인 상태 이모티콘 고르기", EMOJI_LIST, index=emoji_idx)
@@ -347,6 +348,102 @@ elif menu == "24시간 일과 기록":
         conn.commit()
         conn.close()
         st.success("📝 하루 마감 데이터가 안전하게 저장되었습니다!")
+
+    # ----------------------------------------------------
+    # 🔥 [새로운 추가 기능] 내일의 하루 설계 시뮬레이션 원그래프 2개
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.header("🔮 내일의 하루 미리 그려보기 (시뮬레이션)")
+    st.caption("회고를 마친 후, 내일의 타임라인을 두 가지 시선으로 미리 디자인해보세요.")
+    
+    # 데이터 로드 (예상 하루 / 보내고 싶은 하루)
+    conn = sqlite3.connect(DB_FILE)
+    df_db_expected = pd.read_sql_query("SELECT hour, activity_type, memo FROM daily_activities WHERE date = ? AND plan_type = 'expected'", conn, params=(date_str,))
+    df_db_wanted = pd.read_sql_query("SELECT hour, activity_type, memo FROM daily_activities WHERE date = ? AND plan_type = 'wanted'", conn, params=(date_str,))
+    conn.close()
+    
+    db_expected = {row['hour']: {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_db_expected.iterrows()}
+    db_wanted = {row['hour']: {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_db_wanted.iterrows()}
+    
+    rows_expected, rows_wanted = [], []
+    for h in range(24):
+        exp_info = db_expected.get(h, {"activity_type": "미기록", "memo": ""})
+        wnt_info = db_wanted.get(h, {"activity_type": "미기록", "memo": ""})
+        rows_expected.append({"hour": h, "activity_type": exp_info["activity_type"], "memo": exp_info["memo"], "size": 1})
+        rows_wanted.append({"hour": h, "activity_type": wnt_info["activity_type"], "memo": wnt_info["memo"], "size": 1})
+        
+    df_expected = pd.DataFrame(rows_expected)
+    df_wanted = pd.DataFrame(rows_wanted)
+    
+    # 2개의 그래프를 나란히 배치하기 위해 컬럼 분할
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        fig_exp = draw_clock_chart(df_expected, "💭 내일의 예상 하루<br>(현재 흐름대로 보낼 하루)")
+        selected_exp = st.plotly_chart(fig_exp, use_container_width=True, on_select="rerun", key="expected_clock_chart")
+        
+    with col_chart2:
+        fig_wnt = draw_clock_chart(df_wanted, "🌟 내일 보내고 싶은 하루<br>(이상적으로 바라는 하루)")
+        selected_wnt = st.plotly_chart(fig_wnt, use_container_width=True, on_select="rerun", key="wanted_clock_chart")
+        
+    # 선택 반응 탐지 인터페이스
+    target_tomorrow_hour = None
+    tomorrow_mode = None
+    
+    if selected_exp and "selection" in selected_exp and "points" in selected_exp["selection"] and len(selected_exp["selection"]["points"]) > 0:
+        point_idx = selected_exp["selection"]["points"][0]["point_number"]
+        target_tomorrow_hour = int(df_expected.iloc[point_idx]['hour'])
+        tomorrow_mode = "expected"
+        st.info(f"🔮 **[내일의 예상 하루]** 의 {target_tomorrow_hour:02d}:00 블럭이 선택되었습니다.")
+        
+    elif selected_wnt and "selection" in selected_wnt and "points" in selected_wnt["selection"] and len(selected_wnt["selection"]["points"]) > 0:
+        point_idx = selected_wnt["selection"]["points"][0]["point_number"]
+        target_tomorrow_hour = int(df_wanted.iloc[point_idx]['hour'])
+        tomorrow_mode = "wanted"
+        st.info(f"🔮 **[내일 보내고 싶은 하루]** 의 {target_tomorrow_hour:02d}:00  블럭이 선택되었습니다.")
+
+    # 직접 선택 편집기 (모바일 환경 보완용)
+    with st.expander("🔍 내일 계획 시간 조각 직접 선택해서 편집하기"):
+        c_sel1, c_sel2 = st.columns(2)
+        with c_sel1:
+            select_tomorrow_type = st.selectbox("어떤 계획을 편집할까요?", ["💭 내일의 예상 하루", "🌟 내일 보내고 싶은 하루"])
+        with c_sel2:
+            range_opts_tomorrow = [f"{h:02d}:00~{h+1:02d}:00" for h in range(24)]
+            select_tomorrow_range = st.selectbox("시간 범위", range_opts_tomorrow, key="tomorrow_hour_sel")
+        if st.button("🔓 선택한 내일 시간 편집창 열기", use_container_width=True):
+            st.session_state["mobile_tomorrow_hour"] = int(select_tomorrow_range.split(":")[0])
+            st.session_state["mobile_tomorrow_type"] = "expected" if "예상" in select_tomorrow_type else "wanted"
+
+    if st.session_state.get("mobile_tomorrow_type") in ["expected", "wanted"]:
+        target_tomorrow_hour = st.session_state.get("mobile_tomorrow_hour")
+        tomorrow_mode = st.session_state.get("mobile_tomorrow_type")
+
+    # 내일 계획 데이터 편집기 출력 및 DB 반영
+    if target_tomorrow_hour is not None and tomorrow_mode is not None:
+        title_tag = "💭 내일의 예상 하루" if tomorrow_mode == "expected" else "🌟 내일 보내고 싶은 하루"
+        current_df = df_expected if tomorrow_mode == "expected" else df_wanted
+        current_status = current_df[current_df['hour'] == target_tomorrow_hour].iloc[0]
+        
+        st.markdown(f"### ✍️ {title_tag} [{target_tomorrow_hour:02d}:00 ~ {target_tomorrow_hour+1:02d}:00] 조각 편집")
+        type_options = ["수면", "집중", "핸드폰 및 딴짓", "미기록"]
+        default_idx = type_options.index(current_status['activity_type']) if current_status['activity_type'] in type_options else 3
+        
+        act_type_tom = st.radio("행동 유형 설정", type_options, index=default_idx, key="tom_radio_act")
+        memo_text_tom = st.text_input("💡 예정된 활동 메모 기입", value=current_status['memo'], key="tom_memo_act")
+        
+        if st.button(f"💾 {title_tag} 데이터 보관", use_container_width=True):
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO daily_activities (date, hour, activity_type, memo, plan_type)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (date_str, target_tomorrow_hour, act_type_tom, memo_text_tom, tomorrow_mode))
+            conn.commit()
+            conn.close()
+            st.success(f"✅ {title_tag} 조각이 무사히 기기에 보관되었습니다.")
+            if "mobile_tomorrow_hour" in st.session_state: del st.session_state["mobile_tomorrow_hour"]
+            if "mobile_tomorrow_type" in st.session_state: del st.session_state["mobile_tomorrow_type"]
+            st.rerun()
 
 # ==========================================
 # 5. 집중 및 휴식 타이머 화면
@@ -377,14 +474,12 @@ elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
     tab1, tab2 = st.tabs(["📉 감정 통계 & 캘린더", "📜 과거 성찰 일기 & 하루 회고 모아보기"])
     
-    # DB에서 달력을 만들기 위한 데이터 일괄 로드
     conn = sqlite3.connect(DB_FILE)
     df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
     df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
-    df_all_acts = pd.read_sql_query("SELECT date, hour, activity_type FROM daily_activities ORDER BY date, hour ASC", conn)
+    df_all_acts = pd.read_sql_query("SELECT date, hour, activity_type FROM daily_activities WHERE plan_type='actual' ORDER BY date, hour ASC", conn)
     conn.close()
     
-    # 💡 기상 시간 계산 알고리즘 수행
     wakeup_map = {}
     if not df_all_acts.empty:
         for g_date, group in df_all_acts.groupby('date'):
@@ -459,10 +554,8 @@ elif menu == "일일/주간 분석 리포트":
             emo_rows = []
             for _, row in df_emotion.iterrows():
                 t_slot = row['time_slot']
-                # JSON 복원
                 try: cust_emo = json.loads(row['custom_emotions']) if row['custom_emotions'] else {}
                 except: cust_emo = {}
-                
                 for e_name in ['우울', '불안', '분노', '기쁨', '공포', '무서움']:
                     eng_name = {'우울':'depression','불안':'anxiety','분노':'anger','기쁨':'joy','공포':'fear','무서움':'dread'}[e_name]
                     emo_rows.append({"time_slot": t_slot, "감정 종류": e_name, "점수(%)": row[eng_name]})
@@ -481,7 +574,6 @@ elif menu == "일일/주간 분석 리포트":
         conn.close()
         
         st.markdown(f"### 📅 {archive_date} 기록 열람결과")
-        
         st.markdown("#### 🪵 시간대별 감정 성찰 일지")
         if df_emo_history.empty:
             st.info("해당 날짜에 작성된 감정 성찰 기록이 없습니다.")
@@ -515,16 +607,6 @@ elif menu == "일일/주간 분석 리포트":
             st.info(f"**🤔 1. 오늘의 반성**\n\n{rev_hist['reflection']}")
             st.warning(f"**🚀 2. 내일 더 나아지기 위해 할 것**\n\n{rev_hist['improvement']}")
             st.info(f"**🎉 3. 오늘의 칭찬**\n\n{rev_hist['praise']}")
-            
-            if st.button("🗑️ 오늘의 종합 회고 전부 삭제하기", use_container_width=True):
-                conn = sqlite3.connect(DB_FILE)
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM daily_reviews WHERE date = ?", (arc_str,))
-                conn.commit()
-                conn.close()
-                st.success("👌 오늘의 종합 회고 일지가 완전히 삭제되었습니다.")
-                time.sleep(1)
-                st.rerun()
 
 # ==========================================
 # 7. 나만의 감정 극복법
@@ -547,10 +629,7 @@ elif menu == "나만의 감정 극복법":
 
     st.markdown("---")
     st.subheader("📜 누적된 나만의 멘탈 치트키 리스트")
-    
-    conn = sqlite3.connect(DB_FILE)
-    df_strat = pd.read_sql_query("SELECT * FROM coping_strategies", conn)
-    conn.close()
+    df_strat = pd.read_sql_query("SELECT * FROM coping_strategies", sqlite3.connect(DB_FILE))
     
     if df_strat.empty:
         st.info("등록된 극복 팁이 없습니다.")
@@ -561,8 +640,7 @@ elif menu == "나만의 감정 극복법":
                 st.markdown(f"#### **{cat}**")
                 for idx, item in sub_items.iterrows():
                     c1, c2 = st.columns([0.85, 0.15])
-                    with c1:
-                        st.info(f"✔️ {item['strategy_text']}")
+                    with c1: st.info(f"✔️ {item['strategy_text']}")
                     with c2:
                         if st.button("❌ 삭제", key=f"del_strat_{item['id']}"):
                             conn = sqlite3.connect(DB_FILE)
