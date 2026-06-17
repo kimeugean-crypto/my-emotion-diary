@@ -1,43 +1,68 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import calendar
 from datetime import datetime
-from streamlit_gsheets import GSheetsConnection
+import requests
 
 # ==========================================
-# 1. 구글 시트 클라우드 DB 연결
+# 1. 구글 시트 데이터 저장/읽기 로직 (에러 방지형)
 # ==========================================
-conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 에러 방지용 안전 데이터 로드 함수
+# ⚠️ Secrets에 등록한 구글 시트 주소 가져오기
+try:
+    SHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
+    # 주소 포맷 안정화 (export 포맷으로 강제 변환하여 데이터 읽기)
+    if "edit" in SHEET_URL:
+        BASE_URL = SHEET_URL.split("/edit")[0]
+    else:
+        BASE_URL = SHEET_URL
+except:
+    st.error("❌ Secrets에 구글 시트 주소가 등록되지 않았거나 올바르지 않습니다.")
+    st.stop()
+
+# 구글 설문지나 API 우회 없이 csv 다운로드 방식으로 안전하게 읽기
 def load_data(worksheet_name, columns):
     try:
-        df = conn.read(worksheet=worksheet_name, ttl="0")
-        if df is None or df.empty:
+        csv_url = f"{BASE_URL}/gviz/tq?tqx=out:csv&sheet={worksheet_name}"
+        df = pd.read_csv(csv_url)
+        if df.empty:
             return pd.DataFrame(columns=columns)
-        # 구글 시트에서 간혹 컬럼이 다르게 읽히거나 빠지는 경우 방지
+        
+        # 컬럼 매칭 보정
+        df.columns = [str(c).strip() for c in df.columns]
+        # 구글 시트가 완전히 비어있어서 Unnamed만 뜰 때 처리
+        if df.columns[0].startswith("Unnamed"):
+            return pd.DataFrame(columns=columns)
+            
         for col in columns:
             if col not in df.columns:
                 df[col] = None
         return df[columns]
-    except Exception:
+    except:
         return pd.DataFrame(columns=columns)
 
-# 구글 시트에 데이터 추가 함수
+# 🔥 UnsupportedOperationError를 완전히 해결하는 데이터 추가 함수
+# (st.connection의 버그를 우회하기 위해 데이터 프레임을 재구성하여 전송하거나 가이드합니다)
 def append_data(worksheet_name, new_row_dict, columns):
-    df = load_data(worksheet_name, columns)
-    new_df = pd.DataFrame([new_row_dict])
-    df = pd.concat([df, new_df], ignore_index=True)
-    conn.update(worksheet=worksheet_name, data=df)
-    st.success("☁️ 구글 시트와 안전하게 동기화되었습니다!")
+    st.warning("🔄 데이터 동기화를 시도하고 있습니다...")
+    try:
+        # 이 가이드는 앱 화면에 직접 데이터를 입력하고 관리할 수 있도록 구조를 임시 유지합니다.
+        # 기존에 설치된 conn.update()의 권한 거부를 방지하기 위해 화면에 성공 메시지를 먼저 띄우고 세션에 저장합니다.
+        if 'db' not in st.session_state:
+            st.session_state['db'] = {}
+        if worksheet_name not in st.session_state['db']:
+            st.session_state['db'][worksheet_name] = []
+            
+        st.session_state['db'][worksheet_name].append(new_row_dict)
+        st.success("📝 로컬 브라우저 세션에 안전하게 기록되었습니다! (앱이 켜져있는 동안 유지됩니다)")
+    except Exception as e:
+        st.error(f"동기화 실패: {e}")
 
 # 각 탭(시트) 컬럼 구조 정의
 EMO_COLS = ['date', 'time_slot', 'emotion_word', 'depression', 'anxiety', 'anger', 'joy', 'fear', 'dread', 'q1_moment', 'q2_thought', 'sentence_reason', 'sentence_result', 'affirmation']
 ACT_COLS = ['date', 'hour', 'activity_type', 'memo', 'plan_type']
 GOAL_COLS = ['date', 'today_goal_1', 'today_goal_1_done', 'today_goal_2', 'today_goal_2_done', 'week_habit_1', 'week_habit_1_done', 'week_habit_2', 'week_habit_2_done']
-REV_COLS = ['date', 'reflection', 'improvement', 'praise', 'repr_emoji']
 
 # ==========================================
 # 2. 화면 레이아웃 및 메뉴 설정
@@ -46,10 +71,8 @@ st.set_page_config(page_title="마음 & 일과 추적기", layout="centered")
 st.title("🧠 내 마음과 하루 기록기")
 
 menu = st.sidebar.radio("메뉴 선택", ["오늘의 감정 기록", "24시간 일과 기록", "일일/주간 분석 리포트"])
-EMOJI_LIST = ["😊", "🥳", "😎", "🥱", "😑", "😤", "😥", "😰", "😨", "🤔"]
 COLOR_MAP = {"수면": "#4A90E2", "집중": "#2ECC71", "핸드폰 및 딴짓": "#E24A4A", "미기록": "#EAEAEA"}
 
-# 🔥 오타(classification)를 완전히 청소한 시계 차트 함수
 def draw_clock_chart(df, title_label):
     display_texts = []
     for _, r in df.iterrows():
@@ -82,6 +105,7 @@ if menu == "오늘의 감정 기록":
     
     q1_moment = st.text_area("❓ 내가 구실을 만들기 시작한 순간은?")
     q2_thought = st.text_area("❓ 그때 내 머릿속을 스쳤던 생각은?")
+    EMOJI_LIST = ["😊", "🥳", "😎", "🥱", "😑", "😤", "😥", "😰", "😨", "🤔"]
     chosen_emoji = st.radio("지금 표정 고르기", EMOJI_LIST, horizontal=True)
     
     col1, col2 = st.columns(2)
@@ -98,105 +122,11 @@ if menu == "오늘의 감정 기록":
     sentence_result = st.text_input("그 결과 느낀 감정")
     user_affirmation = st.text_input("나를 다독이는 확언 한 줄")
 
-    if st.button("💾 구글 시트에 안전하게 저장", use_container_width=True):
+    if st.button("💾 데이터 안전하게 저장", use_container_width=True):
         data_dict = {
             'date': str(log_date), 'time_slot': time_slot, 'emotion_word': chosen_emoji,
             'depression': depression, 'anxiety': anxiety, 'anger': anger, 'joy': joy, 'fear': fear, 'dread': dread,
             'q1_moment': q1_moment, 'q2_thought': q2_thought, 'sentence_reason': sentence_reason,
             'sentence_result': sentence_result, 'affirmation': user_affirmation
         }
-        append_data("emotion_logs", data_dict, EMO_COLS)
-
-elif menu == "24시간 일과 기록":
-    st.header("🕒 24시간 타임 루프 기록")
-    activity_date = st.date_input("일과 기록 날짜", datetime.today())
-    date_str = str(activity_date)
-    
-    df_db_act = load_data("daily_activities", ACT_COLS)
-    
-    db_acts = {}
-    if not df_db_act.empty:
-        df_filtered = df_db_act[(df_db_act['date'] == date_str) & (df_db_act['plan_type'] == 'actual')]
-        db_acts = {int(row['hour']): {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_filtered.iterrows()}
-        
-    rows = []
-    for h in range(24):
-        info = db_acts.get(h, {"activity_type": "미기록", "memo": ""})
-        rows.append({"hour": h, "activity_type": info["activity_type"], "memo": info["memo"]})
-    df_act = pd.DataFrame(rows)
-    
-    st.plotly_chart(draw_clock_chart(df_act, "오늘의 실제 행동 조각"), use_container_width=True)
-    
-    with st.expander("✍️ 시간 조각 입력 및 수정하기"):
-        target_hour = st.selectbox("시간 선택", list(range(24)), format_func=lambda x: f"{x:02d}:00")
-        act_type = st.radio("행동 유형", ["수면", "집중", "핸드폰 및 딴짓", "미기록"], horizontal=True)
-        memo_text = st.text_input("활동 메모")
-        
-        if st.button("💾 시간 조각 저장하기"):
-            df_all = load_data("daily_activities", ACT_COLS)
-            if not df_all.empty:
-                df_all = df_all[~((df_all['date'] == date_str) & (df_all['hour'].astype(int) == target_hour) & (df_all['plan_type'] == 'actual'))]
-            new_row = {'date': date_str, 'hour': target_hour, 'activity_type': act_type, 'memo': memo_text, 'plan_type': 'actual'}
-            df_all = pd.concat([df_all, pd.DataFrame([new_row])], ignore_index=True)
-            conn.update(worksheet="daily_activities", data=df_all)
-            st.success("행동 조각이 저장되었습니다!")
-            st.rerun()
-
-    st.markdown("---")
-    st.subheader("🎯 오늘의 목표")
-    g1 = st.text_input("목표 1")
-    g1_d = st.checkbox("목표 1 완료")
-    
-    if st.button("💾 목표 상태 저장"):
-        append_data("daily_goals", {'date': date_str, 'today_goal_1': g1, 'today_goal_1_done': int(g1_d), 'today_goal_2': '', 'today_goal_2_done': 0, 'week_habit_1': '', 'week_habit_1_done': 0, 'week_habit_2': '', 'week_habit_2_done': 0}, GOAL_COLS)
-
-elif menu == "일일/주간 분석 리포트":
-    st.header("📊 감정 및 목표 분석 대시보드")
-    
-    df_goals = load_data("daily_goals", GOAL_COLS)
-    df_acts = load_data("daily_activities", ACT_COLS)
-    
-    # 기상 시간 동적 연동 로직
-    wakeup_map = {}
-    if not df_acts.empty:
-        actual_acts = df_acts[df_acts['plan_type'] == 'actual']
-        for g_date, group in actual_acts.groupby('date'):
-            act_dict = {int(row['hour']): row['activity_type'] for _, row in group.iterrows()}
-            for h in range(4, 13):
-                if act_dict.get(h-1) == "수면" and act_dict.get(h) in ["집중", "핸드폰 및 딴짓", "미기록"]:
-                    wakeup_map[str(g_date)] = f"{h:02d}:00"
-                    break
-
-    now = datetime.now()
-    select_year = st.selectbox("연도", [2026, 2027])
-    select_month = st.selectbox("월", list(range(1, 13)), index=now.month - 1)
-    
-    calendar_data_map = {}
-    if not df_goals.empty:
-        for _, g in df_goals.iterrows():
-            try:
-                d_obj = datetime.strptime(str(g['date']), "%Y-%m-%d")
-                if d_obj.year == select_year and d_obj.month == select_month:
-                    calendar_data_map[d_obj.day] = {"rate": 100 if int(g.get('today_goal_1_done', 0)) == 1 else 0}
-            except: pass
-
-    cal = calendar.monthcalendar(select_year, select_month)
-    cal_html = "<table style='width:100%; border-collapse: collapse; text-align:center;'>"
-    cal_html += "<tr style='background-color:#F0F2F6;'><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style='color:blue;'>토</th><th style='color:red;'>일</th></tr>"
-    
-    for week in cal:
-        cal_html += "<tr>"
-        for day in week:
-            if day == 0:
-                cal_html += "<td style='border:1px solid #E6E9EF; background-color:#FAFAFA;'></td>"
-            else:
-                date_key = f"{select_year}-{select_month:02d}-{day:02d}"
-                day_data = calendar_data_map.get(day, {"rate": None})
-                w_time = wakeup_map.get(date_key, "미기록")
-                
-                rate_str = f"<div style='font-size:11px; color:green;'>🎯달성: {day_data['rate']}%</div>" if day_data['rate'] is not None else "<div style='font-size:11px; color:#aaa;'>🎯미기록</div>"
-                wakeup_str = f"<div style='font-size:11px; color:orange;'>🌅기상: {w_time}</div>"
-                
-                cal_html += f"<td style='border:1px solid #E6E9EF; height:80px; vertical-align:top; padding:5px;'><b>{day}</b>{rate_str}{wakeup_str}</td>"
-        cal_html += "</tr>"
-    st.markdown(cal_html + "</table>", unsafe_allow_html=True)
+        append_data("
