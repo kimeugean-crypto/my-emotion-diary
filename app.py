@@ -129,4 +129,83 @@ if menu == "오늘의 감정 기록":
             'q1_moment': q1_moment, 'q2_thought': q2_thought, 'sentence_reason': sentence_reason,
             'sentence_result': sentence_result, 'affirmation': user_affirmation
         }
-        append_data("
+        append_data("emotion_logs", data_dict, EMO_COLS)
+
+elif menu == "24시간 일과 기록":
+    st.header("🕒 24시간 타임 루프 기록")
+    activity_date = st.date_input("일과 기록 날짜", datetime.today())
+    date_str = str(activity_date)
+    
+    df_db_act = load_data("daily_activities", ACT_COLS)
+    
+    # 세션 임시 데이터 병합하여 보여주기
+    if 'db' in st.session_state and 'daily_activities' in st.session_state['db']:
+        df_local = pd.DataFrame(st.session_state['db']['daily_activities'])
+        df_db_act = pd.concat([df_db_act, df_local], ignore_index=True)
+    
+    db_acts = {}
+    if not df_db_act.empty:
+        df_filtered = df_db_act[(df_db_act['date'] == date_str)]
+        db_acts = {int(row['hour']): {"activity_type": row['activity_type'], "memo": row['memo']} for _, row in df_filtered.iterrows()}
+        
+    rows = []
+    for h in range(24):
+        info = db_acts.get(h, {"activity_type": "미기록", "memo": ""})
+        rows.append({"hour": h, "activity_type": info["activity_type"], "memo": info["memo"]})
+    df_act = pd.DataFrame(rows)
+    
+    st.plotly_chart(draw_clock_chart(df_act, "오늘의 실제 행동 조각"), use_container_width=True)
+    
+    with st.expander("✍️ 시간 조각 입력 및 수정하기"):
+        target_hour = st.selectbox("시간 선택", list(range(24)), format_func=lambda x: f"{x:02d}:00")
+        act_type = st.radio("행동 유형", ["수면", "집중", "핸드폰 및 딴짓", "미기록"], horizontal=True)
+        memo_text = st.text_input("활동 메모")
+        
+        if st.button("💾 시간 조각 저장하기"):
+            new_row = {'date': date_str, 'hour': target_hour, 'activity_type': act_type, 'memo': memo_text, 'plan_type': 'actual'}
+            append_data("daily_activities", new_row, ACT_COLS)
+            st.rerun()
+
+elif menu == "일일/주간 분석 리포트":
+    st.header("📊 감정 및 목표 분석 대시보드")
+    
+    df_goals = load_data("daily_goals", GOAL_COLS)
+    df_acts = load_data("daily_activities", ACT_COLS)
+    
+    if 'db' in st.session_state:
+        if 'daily_goals' in st.session_state['db']:
+            df_goals = pd.concat([df_goals, pd.DataFrame(st.session_state['db']['daily_goals'])], ignore_index=True)
+        if 'daily_activities' in st.session_state['db']:
+            df_acts = pd.concat([df_acts, pd.DataFrame(st.session_state['db']['daily_activities'])], ignore_index=True)
+
+    now = datetime.now()
+    select_year = st.selectbox("연도", [2026, 2027])
+    select_month = st.selectbox("월", list(range(1, 13)), index=now.month - 1)
+    
+    calendar_data_map = {}
+    if not df_goals.empty:
+        for _, g in df_goals.iterrows():
+            try:
+                d_obj = datetime.strptime(str(g['date']), "%Y-%m-%d")
+                if d_obj.year == select_year and d_obj.month == select_month:
+                    calendar_data_map[d_obj.day] = {"rate": 100 if int(g.get('today_goal_1_done', 0)) == 1 else 0}
+            except: pass
+
+    cal = calendar.monthcalendar(select_year, select_month)
+    cal_html = "<table style='width:100%; border-collapse: collapse; text-align:center;'>"
+    cal_html += "<tr style='background-color:#F0F2F6;'><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style='color:blue;'>토</th><th style='color:red;'>일</th></tr>"
+    
+    for week in cal:
+        cal_html += "<tr>"
+        for day in week:
+            if day == 0:
+                cal_html += "<td style='border:1px solid #E6E9EF; background-color:#FAFAFA;'></td>"
+            else:
+                date_key = f"{select_year}-{select_month:02d}-{day:02d}"
+                day_data = calendar_data_map.get(day, {"rate": None})
+                
+                rate_str = f"<div style='font-size:11px; color:green;'>🎯달성: {day_data['rate']}%</div>" if day_data['rate'] is not None else "<div style='font-size:11px; color:#aaa;'>🎯미기록</div>"
+                
+                cal_html += f"<td style='border:1px solid #E6E9EF; height:80px; vertical-align:top; padding:5px;'><b>{day}</b>{rate_str}</td>"
+        cal_html += "</tr>"
+    st.markdown(cal_html + "</table>", unsafe_allow_html=True)
