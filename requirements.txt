@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 apscheduler
+st-gsheets-connection
