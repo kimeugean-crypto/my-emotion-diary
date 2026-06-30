@@ -292,7 +292,7 @@ elif menu == "24시간 일과 기록":
     df_goals = pd.read_sql_query("SELECT * FROM daily_goals WHERE date = ?", conn, params=(date_str,))
     conn.close()
     g_data = df_goals.iloc[0].to_dict() if not df_goals.empty else {"today_goal_1":"","today_goal_1_done":0,"today_goal_2":"","today_goal_2_done":0,"week_habit_1":"","week_habit_1_done":0,"week_habit_2":"","week_habit_2_done":0}
-                  
+                     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.markdown("##### 📌 오늘의 목표")
@@ -332,7 +332,7 @@ elif menu == "24시간 일과 기록":
     except: emoji_idx = 0
     repr_emoji = st.selectbox("🎯 오늘 하루 전체적인 상태 이모티콘 고르기", EMOJI_LIST, index=emoji_idx)
     
-    if st.button("🔔 오늘의 종합 회고 저장 완료", use_container_width=True):
+    if st.button("📝 오늘의 종합 회고 저장 완료", use_container_width=True):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('''
@@ -341,7 +341,7 @@ elif menu == "24시간 일과 기록":
         ''', (date_str, rev_reflection, rev_improvement, rev_praise, repr_emoji))
         conn.commit()
         conn.close()
-        st.success("¼📝 하루 마감 회고가 안전하게 저장되었습니다!")
+        st.success("📝 하루 마감 회고가 안전하게 저장되었습니다!")
 
     # ----------------------------------------------------
     # 내일의 하루 설계 시뮬레이션 원그래프 2개
@@ -432,27 +432,23 @@ elif menu == "집중 및 휴식 타이머 ⏱️":
         st.success("🎉 타이머가 종료되었습니다!")
 
 # ==========================================
-# 6. 일일/주간 분석 리포트 (★달력 UI 수정 및 연동 최적화★)
+# 6. 일일/주간 분석 리포트
 # ==========================================
 elif menu == "일일/주간 분석 리포트":
     st.header("📊 감정 및 목표 분석 대시보드")
     tab1, tab2 = st.tabs(["📉 감정 통계 & 캘린더", "📜 과거 성찰 일기 & 하루 회고 모아보기"])
     
-    # DB에서 달력 연동에 필요한 데이터 통합 로드
     conn = sqlite3.connect(DB_FILE)
     df_all_rev = pd.read_sql_query("SELECT date, repr_emoji FROM daily_reviews", conn)
     df_all_goals = pd.read_sql_query("SELECT * FROM daily_goals", conn)
-    # 실제 일과 중 수면 패턴 분석을 위한 정렬 로드
     df_all_acts = pd.read_sql_query("SELECT date, hour, activity_type FROM daily_activities WHERE plan_type='actual' ORDER BY date, hour ASC", conn)
     conn.close()
     
-    # 🌅 [연동 로직 1] 24시간 실제 일과 데이터를 분석하여 '기상시간' 자동 계산
     wakeup_map = {}
     if not df_all_acts.empty:
         for g_date, group in df_all_acts.groupby('date'):
             act_dict = {int(row['hour']): row['activity_type'] for _, row in group.iterrows()}
             detected_hour = None
-            # 새벽 4시부터 낮 12시 사이에 '수면' 상태였다가 다른 상태로 처음 깨어나는 순간 탐지
             for h in range(4, 13):
                 if act_dict.get(h-1) == "수면" and act_dict.get(h) in ["집중", "핸드폰 및 딴짓", "미기록"]:
                     detected_hour = h
@@ -467,10 +463,8 @@ elif menu == "일일/주간 분석 리포트":
         select_year = col_y.selectbox("연도 선택", [2026, 2027], index=0)
         select_month = col_m.selectbox("월 선택", list(range(1, 13)), index=now.month - 1)
         
-        # 달력 날짜별 데이터 병합 맵 생성
         calendar_data_map = {}
         
-        # 1. 감정 이모티콘 맵핑
         for _, r in df_all_rev.iterrows():
             try:
                 d_obj = datetime.strptime(r['date'], "%Y-%m-%d")
@@ -480,7 +474,6 @@ elif menu == "일일/주간 분석 리포트":
                     calendar_data_map[d_obj.day]["emoji"] = r.get('repr_emoji', '😊')
             except: pass
             
-        # 2. [연동 로직 2] 당일 목표 달성도 비율 계산 및 맵핑
         for _, g in df_all_goals.iterrows():
             try:
                 d_obj = datetime.strptime(g['date'], "%Y-%m-%d")
@@ -488,9 +481,7 @@ elif menu == "일일/주간 분석 리포트":
                     if d_obj.day not in calendar_data_map: 
                         calendar_data_map[d_obj.day] = {"emoji": "⠀", "rate": None, "wakeup": None}
                     
-                    # 채워진 목표의 총 개수 계산
                     total = sum([1 for x in [g.get("today_goal_1"), g.get("today_goal_2"), g.get("week_habit_1"), g.get("week_habit_2")] if x and x.strip() != ""])
-                    # 완료 체크(1)된 개수 계산
                     done = sum([1 for t, d in [
                         (g.get("today_goal_1"), g.get("today_goal_1_done")), 
                         (g.get("today_goal_2"), g.get("today_goal_2_done")), 
@@ -501,7 +492,6 @@ elif menu == "일일/주간 분석 리포트":
                     calendar_data_map[d_obj.day]["rate"] = int((done / total) * 100) if total > 0 else 0
             except: pass
             
-        # 3. 계산해 둔 기상시간 맵핑
         for d_str, w_time in wakeup_map.items():
             try:
                 d_obj = datetime.strptime(d_str, "%Y-%m-%d")
@@ -511,7 +501,6 @@ elif menu == "일일/주간 분석 리포트":
                     calendar_data_map[d_obj.day]["wakeup"] = w_time
             except: pass
             
-        # 렌더링용 HTML 테이블 빌드 (모바일/PC 스크린 최적화 스타일 부여)
         cal = calendar.monthcalendar(select_year, select_month)
         cal_html = """
         <table style='width:100%; border-collapse: collapse; text-align:center; font-family:sans-serif;'>
@@ -533,10 +522,7 @@ elif menu == "일일/주간 분석 리포트":
                     cal_html += "<td style='padding:10px; border:1px solid #E6E9EF; background-color:#FAFAFA;'></td>"
                 else:
                     day_data = calendar_data_map.get(day, {"emoji": "⠀", "rate": None, "wakeup": None})
-                    
-                    # 달성도 가시화 문자열 생성
                     rate_str = f"<div style='font-size:11px; color:#2E7D32; margin-top:4px;'>🎯달성: {day_data['rate']}%</div>" if day_data["rate"] is not None else "<div style='font-size:11px; color:#CCCCCC; margin-top:4px;'>🎯미지정</div>"
-                    # 기상시간 가시화 문자열 생성
                     wakeup_str = f"<div style='font-size:11px; color:#E67E22; margin-top:2px;'>🌅기상: {day_data['wakeup']}</div>" if day_data["wakeup"] is not None else "<div style='font-size:11px; color:#CCCCCC; margin-top:2px;'>🌅미기록</div>"
                     
                     cal_html += f"""
@@ -647,9 +633,11 @@ elif menu == "나만의 감정 극복법":
                 st.markdown(f"#### **{cat}**")
                 for idx, item in sub_items.iterrows():
                     c1, c2 = st.columns([0.85, 0.15])
-                    with c1: st.info(f"✔️ {item['strategy_text']}")
+                    with c1: 
+                        st.info(f"✔️ {item['strategy_text']}")
                     with c2:
-                        if st.button("❌ 삭제", key=f"del_strat_{item['id']}"):
+                        # 💡 잘려있던 부분: 각 처방전 개별 삭제 버튼 구현
+                        if st.button("🗑️", key=f"del_strat_{item['id']}"):
                             conn = sqlite3.connect(DB_FILE)
                             cursor = conn.cursor()
                             cursor.execute("DELETE FROM coping_strategies WHERE id = ?", (int(item['id']),))
